@@ -7,6 +7,7 @@ migration 20261231_0182.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -42,6 +43,15 @@ SUCCESSOR_FRAGMENT = """    -- Notification projections remain under the deferre
         RETURN NEW;
     END IF;
 """ + LEGACY_ANCHOR
+
+_CONDITION_DATA = json.loads((Path(__file__).with_name(
+    'return_condition_security.json')).read_text())
+LEGACY_SOURCE = _CONDITION_DATA['functions'][SIGNATURE]['after']['prosrc']
+if sha256(LEGACY_SOURCE.encode()).hexdigest() != LEGACY_SHA256:
+    raise ValueError('0182 frozen condition-seal predecessor digest mismatch')
+SUCCESSOR_SOURCE = LEGACY_SOURCE.replace(LEGACY_ANCHOR, SUCCESSOR_FRAGMENT, 1)
+if sha256(SUCCESSOR_SOURCE.encode()).hexdigest() != SUCCESSOR_SHA256:
+    raise ValueError('0182 successor condition-seal digest mismatch')
 
 _READY_DATA = json.loads((Path(__file__).with_name(
     'material_request_contact_envelope_security.json')).read_text())['readiness']['after']
@@ -79,6 +89,26 @@ def register(namespace):
     if type(registry) is not dict or registry.get(coordinate) not in (
             LEGACY_SHA256, SUCCESSOR_SHA256):
         raise ValueError('0182 condition-seal predecessor digest not admitted')
+    condition_catalog = namespace.get('_condition_catalog')
+    if condition_catalog is None or not isinstance(condition_catalog.DATA, dict):
+        raise ValueError('0182 condition catalog predecessor not admitted')
+    condition_data = deepcopy(condition_catalog.DATA)
+    condition_row = condition_data.get('functions', {}).get(
+        'rsc_condition_decision_seal_lock()')
+    if not isinstance(condition_row, dict):
+        raise ValueError('0182 condition catalog function predecessor not admitted')
+    condition_after = condition_row.get('after')
+    if not isinstance(condition_after, dict) \
+            or condition_after.get('prosrc') != LEGACY_SOURCE \
+            or sha256(condition_after['prosrc'].encode()).hexdigest() != LEGACY_SHA256:
+        raise ValueError('0182 condition catalog function source predecessor not admitted')
+    successor_after = deepcopy(condition_after)
+    successor_after['prosrc'] = SUCCESSOR_SOURCE
+    definition = successor_after.get('definition')
+    if not isinstance(definition, str) or definition.count(LEGACY_SOURCE) != 1:
+        raise ValueError('0182 condition catalog function definition predecessor not admitted')
+    successor_after['definition'] = definition.replace(LEGACY_SOURCE, SUCCESSOR_SOURCE, 1)
+    condition_row['after'] = successor_after
     registry[coordinate] = SUCCESSOR_SHA256
     manifest = namespace.get('OAM_SYNC_FUNCTION_MANIFEST')
     current = manifest.get(READY_SIGNATURE) if isinstance(manifest, dict) else None
@@ -102,3 +132,4 @@ def register(namespace):
     ready_data['afterSha256'] = READY_SUCCESSOR_SHA256
     ready_data['revision'] = REVISION
     readiness.DATA = ready_data
+    condition_catalog.DATA = condition_data

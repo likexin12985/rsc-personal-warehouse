@@ -48,6 +48,18 @@ def test_successor_keeps_frozen_catalog_and_only_scopes_notification_lock():
     assert ready_new.count('20261231_0182') == 1
 
 
+def test_runtime_condition_catalog_overlay_admits_successor_source():
+    m = runpy.run_path(str(PATH))
+    from app import database_security
+
+    row = database_security._condition_catalog.DATA['functions'][
+        'rsc_condition_decision_seal_lock()']['after']
+    assert row['prosrc'] == m['FIXED_SOURCE']
+    assert sha256(row['prosrc'].encode()).hexdigest() == m['FIXED_HASH']
+    assert row['definition'].count(m['FIXED_SOURCE']) == 1
+    assert m['LEGACY_SOURCE'] not in row['definition']
+
+
 @pytest.mark.parametrize('direction', ['upgrade', 'downgrade'])
 def test_transition_is_online_source_replacement_with_acl_and_trigger_preflight(direction):
     m = runpy.run_path(str(PATH))
