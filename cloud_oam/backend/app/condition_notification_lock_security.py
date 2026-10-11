@@ -1,4 +1,4 @@
-"""Reviewed 0182 successor metadata for the condition-seal lock scope.
+"""Reviewed 0182 successor metadata for the condition lock scopes.
 
 This module is deliberately an overlay: the 0167 runtime catalog remains
 frozen. It publishes the exact successor source digest for validators after
@@ -16,6 +16,11 @@ REVISION = "20261231_0182"
 SIGNATURE = "rsc_condition_decision_seal_lock()"
 LEGACY_SHA256 = "3e954671d1f03deb037d6cf7c70ce7f171e12a44c2402cb44e2c30c1d2a44d7c"
 SUCCESSOR_SHA256 = "cbbbb786f5a92b9e463b1334d0a60a1842eb145ec70fa78bcaf15a2b831f2a13"
+SEAL_SIGNATURE = "rsc_condition_seal_lock()"
+SEAL_LEGACY_SHA256 = "dc92d427506ff729adb759f3adcc2ed772cede1a3cfe9715e6a158c17cb6fb90"
+# Filled from the byte-exact successor source below; this is intentionally a
+# published digest rather than a runtime-derived acceptance value.
+SEAL_SUCCESSOR_SHA256 = "73101a87c866ee3a80a0805befdf3609e39fbcf27ba10318951ffac7f70d1d0a"
 
 # Keep this fragment byte-for-byte identical to the reviewed successor
 # migration.  The deferred fence remains broad; only ordinary notification
@@ -44,6 +49,29 @@ SUCCESSOR_FRAGMENT = """    -- Notification projections remain under the deferre
     END IF;
 """ + LEGACY_ANCHOR
 
+SEAL_LEGACY_ANCHOR = LEGACY_ANCHOR
+SEAL_SUCCESSOR_FRAGMENT = """    -- Notification projections remain under the deferred condition-seal
+    -- fence, but ordinary inventory notifications must not serialize
+    -- unrelated transactions on the shared ledger head. Only condition
+    -- evidence (or the reserved condition-seal namespace) participates in
+    -- the global decision lock. A payload request_id/request_reference alone
+    -- is insufficient because shipment and receipt notifications carry them.
+    IF TG_TABLE_NAME='notification_events'
+       AND NOT (
+          COALESCE(COALESCE(next_row->>'business_type',prior->>'business_type') IN ('stock_condition_request_seal','stock_condition_event'),false)
+          OR COALESCE(COALESCE(next_row->>'event_type',prior->>'event_type') LIKE 'stock_condition.%',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'schema_version',prior->'payload_jsonb'->>'schema_version')='condition_result/1',false)
+          OR COALESCE(COALESCE(next_row->>'action',prior->>'action')='seal_condition_request',false)
+          OR COALESCE(COALESCE(next_row->>'request_id',prior->>'request_id') LIKE 'condition-seal:%',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type') IN ('stock_condition_request_seal','stock_condition_event'),false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_request',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-seal:%',false)
+       ) THEN
+        IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+        RETURN NEW;
+    END IF;
+""" + SEAL_LEGACY_ANCHOR
+
 _CONDITION_DATA = json.loads((Path(__file__).with_name(
     'return_condition_security.json')).read_text())
 LEGACY_SOURCE = _CONDITION_DATA['functions'][SIGNATURE]['after']['prosrc']
@@ -51,6 +79,14 @@ if sha256(LEGACY_SOURCE.encode()).hexdigest() != LEGACY_SHA256:
     raise ValueError('0182 frozen condition-seal predecessor digest mismatch')
 SUCCESSOR_SOURCE = LEGACY_SOURCE.replace(LEGACY_ANCHOR, SUCCESSOR_FRAGMENT, 1)
 if sha256(SUCCESSOR_SOURCE.encode()).hexdigest() != SUCCESSOR_SHA256:
+    raise ValueError('0182 successor condition-seal digest mismatch')
+
+SEAL_LEGACY_SOURCE = _CONDITION_DATA['functions'][SEAL_SIGNATURE]['after']['prosrc']
+if sha256(SEAL_LEGACY_SOURCE.encode()).hexdigest() != SEAL_LEGACY_SHA256:
+    raise ValueError('0182 frozen condition-seal predecessor digest mismatch')
+SEAL_SUCCESSOR_SOURCE = SEAL_LEGACY_SOURCE.replace(
+    SEAL_LEGACY_ANCHOR, SEAL_SUCCESSOR_FRAGMENT, 1)
+if sha256(SEAL_SUCCESSOR_SOURCE.encode()).hexdigest() != SEAL_SUCCESSOR_SHA256:
     raise ValueError('0182 successor condition-seal digest mismatch')
 
 _READY_DATA = json.loads((Path(__file__).with_name(
@@ -82,6 +118,23 @@ def verify_successor_source(source: str) -> None:
         raise ValueError("0182 successor condition-seal lock source mismatch")
 
 
+def seal_successor_source(legacy_source: str) -> str:
+    """Return the exact successor source for the condition-seal lock."""
+    if sha256(legacy_source.encode()).hexdigest() != SEAL_LEGACY_SHA256:
+        raise ValueError("0182 frozen condition-seal lock source drift")
+    if legacy_source.count(SEAL_LEGACY_ANCHOR) != 1:
+        raise ValueError("0182 condition-seal lock anchor mismatch")
+    result = legacy_source.replace(SEAL_LEGACY_ANCHOR, SEAL_SUCCESSOR_FRAGMENT)
+    if sha256(result.encode()).hexdigest() != SEAL_SUCCESSOR_SHA256:
+        raise ValueError("0182 successor condition-seal lock digest mismatch")
+    return result
+
+
+def verify_seal_successor_source(source: str) -> None:
+    if sha256(source.encode()).hexdigest() != SEAL_SUCCESSOR_SHA256:
+        raise ValueError("0182 successor condition-seal lock source mismatch")
+
+
 def overlay(previous):
     """Select 0182 before shared readiness registration builds its catalogs."""
     data = previous.DATA
@@ -105,21 +158,31 @@ def register(namespace):
     SQL and independent catalogs bound to the previous revision.
     """
     registry = namespace.get('FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256')
-    coordinate = ('rsc_condition_decision_seal_lock', '')
-    if type(registry) is not dict or registry.get(coordinate) != LEGACY_SHA256:
+    coordinates = {
+        ('rsc_condition_decision_seal_lock', ''): LEGACY_SHA256,
+        ('rsc_condition_seal_lock', ''): SEAL_LEGACY_SHA256,
+    }
+    if type(registry) is not dict or any(registry.get(key) != value
+                                        for key, value in coordinates.items()):
         raise ValueError('0182 condition-seal predecessor digest not admitted')
     catalog = namespace.get('_condition_catalog')
     if catalog is None or not isinstance(catalog.DATA, dict):
         raise ValueError('0182 condition catalog predecessor not admitted')
     updated = deepcopy(catalog.DATA)
-    row = updated.get('functions', {}).get(SIGNATURE)
-    if not isinstance(row, dict) or row.get('after') != _CONDITION_DATA['functions'][SIGNATURE]['after']:
-        raise ValueError('0182 exact condition function predecessor not admitted')
-    after = row['after']
-    if after['definition'].count(LEGACY_SOURCE) != 1:
-        raise ValueError('0182 condition function definition predecessor not admitted')
-    after['prosrc'] = SUCCESSOR_SOURCE
-    after['definition'] = after['definition'].replace(LEGACY_SOURCE, SUCCESSOR_SOURCE, 1)
+    for signature, legacy_source, successor_source, label in (
+            (SIGNATURE, LEGACY_SOURCE, SUCCESSOR_SOURCE, 'condition decision'),
+            (SEAL_SIGNATURE, SEAL_LEGACY_SOURCE, SEAL_SUCCESSOR_SOURCE, 'condition seal')):
+        row = updated.get('functions', {}).get(signature)
+        if not isinstance(row, dict) or row.get('after') != _CONDITION_DATA['functions'][signature]['after']:
+            raise ValueError(f'0182 exact {label} function predecessor not admitted')
+        after = row['after']
+        if after['definition'].count(legacy_source) != 1:
+            raise ValueError(f'0182 {label} function definition predecessor not admitted')
+        after['prosrc'] = successor_source
+        after['definition'] = after['definition'].replace(legacy_source, successor_source, 1)
     # No publication occurs until the complete source, metadata and ACL agree.
-    registry[coordinate] = SUCCESSOR_SHA256
+    registry.update({
+        ('rsc_condition_decision_seal_lock', ''): SUCCESSOR_SHA256,
+        ('rsc_condition_seal_lock', ''): SEAL_SUCCESSOR_SHA256,
+    })
     catalog.DATA = updated

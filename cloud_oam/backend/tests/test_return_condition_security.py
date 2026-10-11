@@ -29,9 +29,8 @@ def test_runtime_is_exact_readonly_projection_and_full_import_succeeds():
                    ('MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256',
                     'FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256', 'RUNTIME_FUNCTION_BODY_SHA256')
                    if coordinate in getattr(runtime, key)]
-        expected_hash = (notification_scope.FIXED_HASH
-                         if coordinate == notification_scope.COORDINATE
-                         else sha256(row['prosrc'].encode()).hexdigest())
+        expected_hash = notification_scope.FIXED_HASHES.get(
+            coordinate, sha256(row['prosrc'].encode()).hexdigest())
         assert matches == [expected_hash]
     from migration_source_expectations import current_source_body
     assert runtime._stock_scrap_readiness.DATA['after']['prosrc'] == current_source_body(

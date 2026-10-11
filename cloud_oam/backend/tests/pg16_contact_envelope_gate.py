@@ -76,7 +76,7 @@ def current_catalog_data(data):
     current['revision'] = HEAD
     current['observed_function_names'] = sorted(set(
         current['observed_function_names']
-        + ['rsc_condition_decision_seal_lock']
+        + ['rsc_condition_decision_seal_lock', 'rsc_condition_seal_lock']
     ))
     functions = current['catalog']['functions']['after']
     ready = functions['rsc_oam_runtime_binding_ready_0044()']
@@ -86,6 +86,10 @@ def current_catalog_data(data):
     current['catalog']['functions']['after']['rsc_condition_decision_seal_lock()'] = deepcopy(
         json.loads((WORKSPACE / 'backend/alembic/condition_notification_lock_scope_0182/functions.json').read_text())
         ['functions']['rsc_condition_decision_seal_lock()']['after']
+    )
+    current['catalog']['functions']['after']['rsc_condition_seal_lock()'] = deepcopy(
+        json.loads((WORKSPACE / 'backend/alembic/condition_notification_lock_scope_0182/functions.json').read_text())
+        ['functions']['rsc_condition_seal_lock()']['after']
     )
     return current
 

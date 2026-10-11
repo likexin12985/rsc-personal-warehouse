@@ -47,6 +47,54 @@
           }
         ]
       }
+    },
+    "rsc_condition_seal_lock()": {
+      "before": {
+        "proname": "rsc_condition_seal_lock",
+        "signature": "rsc_condition_seal_lock()",
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_condition_seal_lock()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nDECLARE prior jsonb; next_row jsonb;\nBEGIN\n    IF TG_OP<>'INSERT' THEN prior:=to_jsonb(OLD); END IF;\n    IF TG_OP<>'DELETE' THEN next_row:=to_jsonb(NEW); END IF;\n    IF NOT public.rsc_condition_seal_relevant(TG_TABLE_NAME,prior)\n       AND NOT public.rsc_condition_seal_relevant(TG_TABLE_NAME,next_row) THEN\n        IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n        RETURN NEW;\n    END IF;\n    IF current_setting('transaction_isolation')<>'read committed' THEN\n        RAISE EXCEPTION 'condition seal fence requires read committed' USING ERRCODE='23514'; END IF;\n    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;\n    IF NOT FOUND THEN RAISE EXCEPTION 'condition seal fence ledger head required' USING ERRCODE='23514'; END IF;\n    IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n    RETURN NEW;\nEND $function$\n",
+        "prosrc": "\nDECLARE prior jsonb; next_row jsonb;\nBEGIN\n    IF TG_OP<>'INSERT' THEN prior:=to_jsonb(OLD); END IF;\n    IF TG_OP<>'DELETE' THEN next_row:=to_jsonb(NEW); END IF;\n    IF NOT public.rsc_condition_seal_relevant(TG_TABLE_NAME,prior)\n       AND NOT public.rsc_condition_seal_relevant(TG_TABLE_NAME,next_row) THEN\n        IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n        RETURN NEW;\n    END IF;\n    IF current_setting('transaction_isolation')<>'read committed' THEN\n        RAISE EXCEPTION 'condition seal fence requires read committed' USING ERRCODE='23514'; END IF;\n    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;\n    IF NOT FOUND THEN RAISE EXCEPTION 'condition seal fence ledger head required' USING ERRCODE='23514'; END IF;\n    IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n    RETURN NEW;\nEND ",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proparallel": "u",
+        "proisstrict": false,
+        "proleakproof": false,
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "star_oam_migrator",
+        "identity_arguments": "",
+        "acl": [
+          {
+            "grantee": "star_oam_migrator",
+            "grantable": false,
+            "privilege": "EXECUTE"
+          }
+        ]
+      },
+      "after": {
+        "proname": "rsc_condition_seal_lock",
+        "signature": "rsc_condition_seal_lock()",
+        "definition": "CREATE OR REPLACE FUNCTION public.rsc_condition_seal_lock()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'public'\nAS $function$\nDECLARE prior jsonb; next_row jsonb;\nBEGIN\n    IF TG_OP<>'INSERT' THEN prior:=to_jsonb(OLD); END IF;\n    IF TG_OP<>'DELETE' THEN next_row:=to_jsonb(NEW); END IF;\n    IF NOT public.rsc_condition_seal_relevant(TG_TABLE_NAME,prior)\n       AND NOT public.rsc_condition_seal_relevant(TG_TABLE_NAME,next_row) THEN\n        IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n        RETURN NEW;\n    END IF;\n    IF current_setting('transaction_isolation')<>'read committed' THEN\n        RAISE EXCEPTION 'condition seal fence requires read committed' USING ERRCODE='23514'; END IF;\n    -- Notification projections remain under the deferred condition-seal\n    -- fence, but ordinary inventory notifications must not serialize\n    -- unrelated transactions on the shared ledger head. Only condition\n    -- evidence (or the reserved condition-seal namespace) participates in\n    -- the global decision lock. A payload request_id/request_reference alone\n    -- is insufficient because shipment and receipt notifications carry them.\n    IF TG_TABLE_NAME='notification_events'\n       AND NOT (\n          COALESCE(COALESCE(next_row->>'business_type',prior->>'business_type') IN ('stock_condition_request_seal','stock_condition_event'),false)\n          OR COALESCE(COALESCE(next_row->>'event_type',prior->>'event_type') LIKE 'stock_condition.%',false)\n          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'schema_version',prior->'payload_jsonb'->>'schema_version')='condition_result/1',false)\n          OR COALESCE(COALESCE(next_row->>'action',prior->>'action')='seal_condition_request',false)\n          OR COALESCE(COALESCE(next_row->>'request_id',prior->>'request_id') LIKE 'condition-seal:%',false)\n          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type') IN ('stock_condition_request_seal','stock_condition_event'),false)\n          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_request',false)\n          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-seal:%',false)\n       ) THEN\n        IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n        RETURN NEW;\n    END IF;\n    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;\n    IF NOT FOUND THEN RAISE EXCEPTION 'condition seal fence ledger head required' USING ERRCODE='23514'; END IF;\n    IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n    RETURN NEW;\nEND $function$\n",
+        "prosrc": "\nDECLARE prior jsonb; next_row jsonb;\nBEGIN\n    IF TG_OP<>'INSERT' THEN prior:=to_jsonb(OLD); END IF;\n    IF TG_OP<>'DELETE' THEN next_row:=to_jsonb(NEW); END IF;\n    IF NOT public.rsc_condition_seal_relevant(TG_TABLE_NAME,prior)\n       AND NOT public.rsc_condition_seal_relevant(TG_TABLE_NAME,next_row) THEN\n        IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n        RETURN NEW;\n    END IF;\n    IF current_setting('transaction_isolation')<>'read committed' THEN\n        RAISE EXCEPTION 'condition seal fence requires read committed' USING ERRCODE='23514'; END IF;\n    -- Notification projections remain under the deferred condition-seal\n    -- fence, but ordinary inventory notifications must not serialize\n    -- unrelated transactions on the shared ledger head. Only condition\n    -- evidence (or the reserved condition-seal namespace) participates in\n    -- the global decision lock. A payload request_id/request_reference alone\n    -- is insufficient because shipment and receipt notifications carry them.\n    IF TG_TABLE_NAME='notification_events'\n       AND NOT (\n          COALESCE(COALESCE(next_row->>'business_type',prior->>'business_type') IN ('stock_condition_request_seal','stock_condition_event'),false)\n          OR COALESCE(COALESCE(next_row->>'event_type',prior->>'event_type') LIKE 'stock_condition.%',false)\n          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'schema_version',prior->'payload_jsonb'->>'schema_version')='condition_result/1',false)\n          OR COALESCE(COALESCE(next_row->>'action',prior->>'action')='seal_condition_request',false)\n          OR COALESCE(COALESCE(next_row->>'request_id',prior->>'request_id') LIKE 'condition-seal:%',false)\n          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type') IN ('stock_condition_request_seal','stock_condition_event'),false)\n          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_request',false)\n          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-seal:%',false)\n       ) THEN\n        IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n        RETURN NEW;\n    END IF;\n    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;\n    IF NOT FOUND THEN RAISE EXCEPTION 'condition seal fence ledger head required' USING ERRCODE='23514'; END IF;\n    IF TG_OP='DELETE' THEN RETURN OLD; END IF;\n    RETURN NEW;\nEND ",
+        "prosecdef": true,
+        "provolatile": "v",
+        "proparallel": "u",
+        "proisstrict": false,
+        "proleakproof": false,
+        "proconfig": [
+          "search_path=pg_catalog, public"
+        ],
+        "owner": "star_oam_migrator",
+        "identity_arguments": "",
+        "acl": [
+          {
+            "grantee": "star_oam_migrator",
+            "grantable": false,
+            "privilege": "EXECUTE"
+          }
+        ]
+      }
     }
   }
 }

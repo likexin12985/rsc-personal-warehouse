@@ -46,6 +46,19 @@ def test_successor_keeps_frozen_catalog_and_only_scopes_notification_lock():
     assert sha256(ready_new.encode()).hexdigest() == m['READY_HASH']
     assert ready_new.count('20261230_0181') == 0
     assert ready_new.count('20261231_0182') == 1
+    seal_legacy, seal_fixed = m['_sources']()[m['SEAL_SIGNATURE']]
+    assert sha256(seal_legacy.encode()).hexdigest() == m['SEAL_LEGACY_HASH']
+    assert sha256(seal_fixed.encode()).hexdigest() == m['SEAL_FIXED_HASH']
+    assert seal_fixed.replace(m['SEAL_LOCK_SCOPE_GUARD'], '') == seal_legacy
+    assert seal_fixed.index("TG_TABLE_NAME='notification_events'") < seal_fixed.index('FOR UPDATE')
+    assert 'rsc_condition_seal_relevant' in seal_fixed
+    assert "business_type') IN ('stock_condition_request_seal','stock_condition_event')" in seal_fixed
+    assert "LIKE 'condition-seal:%'" in seal_fixed
+    assert "COALESCE(COALESCE(next_row->>'request_id',prior->>'request_id') LIKE 'condition-seal:%',false)" in seal_fixed
+    assert seal_fixed.count('COALESCE(COALESCE(') == 8
+    parser.parse_plpgsql_json(
+        'CREATE FUNCTION checked_seal() RETURNS trigger LANGUAGE plpgsql AS $body$'
+        + seal_fixed + '$body$')
 
 
 def test_runtime_condition_catalog_overlay_admits_successor_source():
@@ -58,6 +71,12 @@ def test_runtime_condition_catalog_overlay_admits_successor_source():
     assert sha256(row['prosrc'].encode()).hexdigest() == m['FIXED_HASH']
     assert row['definition'].count(m['FIXED_SOURCE']) == 1
     assert m['LEGACY_SOURCE'] not in row['definition']
+    seal_row = database_security._condition_catalog.DATA['functions'][
+        'rsc_condition_seal_lock()']['after']
+    assert seal_row['prosrc'] == m['SEAL_FIXED_SOURCE']
+    assert sha256(seal_row['prosrc'].encode()).hexdigest() == m['SEAL_FIXED_HASH']
+    assert seal_row['definition'].count(m['SEAL_FIXED_SOURCE']) == 1
+    assert m['SEAL_LEGACY_SOURCE'] not in seal_row['definition']
     readiness_rows = [
         row for family in ('newFunctions', 'replacedFunctions')
         for row in database_security._loss_return_stop_catalog.DATA.get(family, [])
@@ -85,7 +104,9 @@ def test_transition_is_online_source_replacement_with_acl_and_trigger_preflight(
         m[direction]()
     sql = output.getvalue()
     pytest.importorskip('pglast.parser').parse_sql(sql)
-    assert m['LEGACY_HASH'] in sql and m['FIXED_HASH'] in sql
+    assert all(value in sql for value in (
+        m['LEGACY_HASH'], m['FIXED_HASH'],
+        m['SEAL_LEGACY_HASH'], m['SEAL_FIXED_HASH']))
     assert 'ACCESS EXCLUSIVE MODE' in sql
     assert "a.grantee <> p.proowner" in sql
     assert "t.tgenabled='A'" in sql

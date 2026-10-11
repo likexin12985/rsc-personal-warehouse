@@ -1,11 +1,11 @@
-"""Keep ordinary notification projections out of the condition-decision lock.
+"""Keep ordinary notification projections out of the condition lock pair.
 
-The 0167 condition-decision fence intentionally remains broad: it must still
-observe late condition evidence.  Its lock trigger, however, used to take the
-shared inventory ledger-head row lock for every relevant notification.  That
-made an ordinary inventory notification wait behind an unrelated transaction
-and fail under the PostgreSQL 16 statement timeout.  This successor changes
-only the trigger function body and keeps the frozen 0167 catalog immutable.
+The 0167 condition fences intentionally remain broad: they must still observe
+late condition evidence. Their lock triggers, however, used to take the shared
+inventory ledger-head row lock for every relevant notification. That made an
+ordinary inventory notification wait behind an unrelated transaction and fail
+under the PostgreSQL 16 statement timeout. This successor changes only the
+trigger function bodies and keeps the frozen 0167 catalog immutable.
 """
 
 from hashlib import sha256
@@ -60,6 +60,40 @@ FIXED_SOURCE = LEGACY_SOURCE.replace(
     READ_COMMITTED_ANCHOR, READ_COMMITTED_ANCHOR + LOCK_SCOPE_GUARD, 1)
 FIXED_HASH = sha256(FIXED_SOURCE.encode()).hexdigest()
 
+SEAL_ROW = DATA['functions']['rsc_condition_seal_lock()']['after']
+SEAL_SIGNATURE = 'public.rsc_condition_seal_lock()'
+SEAL_LEGACY_SOURCE = SEAL_ROW['prosrc']
+SEAL_LEGACY_HASH = 'dc92d427506ff729adb759f3adcc2ed772cede1a3cfe9715e6a158c17cb6fb90'
+if sha256(SEAL_LEGACY_SOURCE.encode()).hexdigest() != SEAL_LEGACY_HASH:
+    raise ValueError('0182 frozen 0167 condition seal lock source drift')
+SEAL_LOCK_SCOPE_GUARD = """    -- Notification projections remain under the deferred condition-seal
+    -- fence, but ordinary inventory notifications must not serialize
+    -- unrelated transactions on the shared ledger head. Only condition
+    -- evidence (or the reserved condition-seal namespace) participates in
+    -- the global decision lock. A payload request_id/request_reference alone
+    -- is insufficient because shipment and receipt notifications carry them.
+    IF TG_TABLE_NAME='notification_events'
+       AND NOT (
+          COALESCE(COALESCE(next_row->>'business_type',prior->>'business_type') IN ('stock_condition_request_seal','stock_condition_event'),false)
+          OR COALESCE(COALESCE(next_row->>'event_type',prior->>'event_type') LIKE 'stock_condition.%',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'schema_version',prior->'payload_jsonb'->>'schema_version')='condition_result/1',false)
+          OR COALESCE(COALESCE(next_row->>'action',prior->>'action')='seal_condition_request',false)
+          OR COALESCE(COALESCE(next_row->>'request_id',prior->>'request_id') LIKE 'condition-seal:%',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type') IN ('stock_condition_request_seal','stock_condition_event'),false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_request',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-seal:%',false)
+       ) THEN
+        IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+        RETURN NEW;
+    END IF;
+"""
+SEAL_LOCK_ANCHOR = "    PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;"
+if SEAL_LEGACY_SOURCE.count(SEAL_LOCK_ANCHOR) != 1:
+    raise ValueError('0182 condition seal lock anchor drift')
+SEAL_FIXED_SOURCE = SEAL_LEGACY_SOURCE.replace(
+    SEAL_LOCK_ANCHOR, SEAL_LOCK_SCOPE_GUARD + SEAL_LOCK_ANCHOR, 1)
+SEAL_FIXED_HASH = sha256(SEAL_FIXED_SOURCE.encode()).hexdigest()
+
 READY_SIGNATURE = 'public.rsc_oam_runtime_binding_ready_0044()'
 READY_ROW = json.loads((Path(__file__).parents[2] /
                         'app/material_request_contact_envelope_security.json').read_text())['readiness']['after']
@@ -77,20 +111,22 @@ READY_HASH = sha256(READY_SOURCE.encode()).hexdigest()
 LOCK_TABLES = {'alembic_version', 'inventory_ledger_heads'}
 for table, change in DATA['tables'].items():
     for trigger in change['after'].get('triggers', []):
-        if trigger.get('function_signature') == 'rsc_condition_decision_seal_lock()':
+        if trigger.get('function_signature') in {
+                'rsc_condition_decision_seal_lock()', 'rsc_condition_seal_lock()'}:
             LOCK_TABLES.add(table)
 LOCK_TABLES = tuple(sorted(LOCK_TABLES))
 
 
 def _sources():
     return {SIGNATURE: (LEGACY_SOURCE, FIXED_SOURCE),
+            SEAL_SIGNATURE: (SEAL_LEGACY_SOURCE, SEAL_FIXED_SOURCE),
             READY_SIGNATURE: (READY_LEGACY_SOURCE, READY_SOURCE)}
 
 
-def _verify(expected_hash):
+def _verify(expected_hash, signature=SIGNATURE):
     op.execute(f"""DO $verify_0182$
 DECLARE
-    function_oid oid := pg_catalog.to_regprocedure('{SIGNATURE}');
+    function_oid oid := pg_catalog.to_regprocedure('{signature}');
     function_source text;
 BEGIN
     SELECT p.prosrc INTO function_source
@@ -126,16 +162,26 @@ def _transition(up):
         raise ValueError('0182 requires PostgreSQL16 or SQLite schema tooling')
     op.execute('LOCK TABLE ' + ','.join('public.' + table for table in LOCK_TABLES)
                + ' IN ACCESS EXCLUSIVE MODE')
-    old, new = (LEGACY_SOURCE, FIXED_SOURCE) if up else (FIXED_SOURCE, LEGACY_SOURCE)
-    _verify(sha256(old.encode()).hexdigest())
     helper = runpy.run_path(str(Path(__file__).with_name('20260909_0069_stock_reservations.py')))
-    helper['_replace_function_source'](
-        signature=SIGNATURE,
-        expected_hash=sha256(old.encode()).hexdigest(),
-        replacement_hash=sha256(new.encode()).hexdigest(),
-        replacements=((old, new),),
-        label='condition_notification_lock_scope_0182')
-    _verify(sha256(new.encode()).hexdigest())
+    if up:
+        transitions = (
+            (SIGNATURE, LEGACY_SOURCE, FIXED_SOURCE),
+            (SEAL_SIGNATURE, SEAL_LEGACY_SOURCE, SEAL_FIXED_SOURCE),
+        )
+    else:
+        transitions = (
+            (SIGNATURE, FIXED_SOURCE, LEGACY_SOURCE),
+            (SEAL_SIGNATURE, SEAL_FIXED_SOURCE, SEAL_LEGACY_SOURCE),
+        )
+    for signature, old, new in transitions:
+        _verify(sha256(old.encode()).hexdigest(), signature)
+        helper['_replace_function_source'](
+            signature=signature,
+            expected_hash=sha256(old.encode()).hexdigest(),
+            replacement_hash=sha256(new.encode()).hexdigest(),
+            replacements=((old, new),),
+            label='condition_notification_lock_scope_0182')
+        _verify(sha256(new.encode()).hexdigest(), signature)
     ready_old, ready_new = ((READY_LEGACY_SOURCE, READY_SOURCE) if up
                             else (READY_SOURCE, READY_LEGACY_SOURCE))
     helper['_replace_function_source'](
