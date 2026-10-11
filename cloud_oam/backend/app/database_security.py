@@ -7067,23 +7067,33 @@ def validate_production_database_security(
             )
             validate_capture_roles(connection, allow_absent=True)
             validate_query_catalog(connection)
-            _review_catalog.validate_review_catalog(connection)
-            _daily_recovery_catalog.validate_recovery_catalog(connection)
-            _loss_correction_catalog.verify(connection)
-            _return_inbound_quality_catalog.verify(connection)
-            _loss_return_stop_catalog.verify(connection)
-            _authentication_fence_catalog.verify(connection)
-            _stock_scrap_catalog.verify(connection)
-            _stock_scrap_readiness.verify(connection)
-            _condition_catalog.verify(connection)
-            _closure_catalog.verify(connection)
-            _remaining_cancel_catalog.verify(connection)
-            _rejection_return_catalog.verify(connection)
-            _rejection_progress_catalog.verify(connection)
-            _rejection_receipt_catalog.verify(connection)
-            _rejection_inbound_catalog.verify(connection)
-            _return_compensation_catalog.verify(connection)
-            _key_provider_binding_catalog.verify(connection)
+            catalog_verifiers = (
+                ('review', _review_catalog.validate_review_catalog),
+                ('daily-recovery', _daily_recovery_catalog.validate_recovery_catalog),
+                ('loss-correction', _loss_correction_catalog.verify),
+                ('return-inbound-quality', _return_inbound_quality_catalog.verify),
+                ('loss-return-stop', _loss_return_stop_catalog.verify),
+                ('authentication-fence', _authentication_fence_catalog.verify),
+                ('stock-scrap', _stock_scrap_catalog.verify),
+                ('stock-scrap-readiness', _stock_scrap_readiness.verify),
+                ('return-condition', _condition_catalog.verify),
+                ('material-request-closure', _closure_catalog.verify),
+                ('material-request-remaining-cancel', _remaining_cancel_catalog.verify),
+                ('material-request-rejection-return', _rejection_return_catalog.verify),
+                ('material-request-rejection-progress', _rejection_progress_catalog.verify),
+                ('material-request-rejection-receipt', _rejection_receipt_catalog.verify),
+                ('material-request-rejection-inbound', _rejection_inbound_catalog.verify),
+                ('material-request-return-compensation', _return_compensation_catalog.verify),
+                ('key-provider-binding', _key_provider_binding_catalog.verify),
+            )
+            for catalog_name, verify_catalog in catalog_verifiers:
+                try:
+                    verify_catalog(connection)
+                except Exception:
+                    raise DatabaseSecurityBoundaryError(
+                        'production database catalog evidence could not be verified: '
+                        + catalog_name
+                    ) from None
             evidence = connection.execute(
                 _ROLE_EVIDENCE_SQL,
                 {"migration_role": expected_migration_role},
