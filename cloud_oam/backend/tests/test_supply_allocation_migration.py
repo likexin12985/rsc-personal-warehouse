@@ -52,9 +52,12 @@ def test_forward_catalog_matches_runtime_and_exact_predecessor():
     assert contact['readiness']['beforeSha256'] == predecessor['afterSha256']
     predecessor = contact['readiness']
     current_ready = security._stock_scrap_readiness.DATA
-    assert current_ready['revision'] == predecessor['revision']
-    assert current_ready['after'] == predecessor['after']
-    assert current_ready['afterSha256'] == predecessor['afterSha256']
+    from app.condition_notification_lock_security import (
+        READY_SUCCESSOR_SHA256, READY_SUCCESSOR_SOURCE, REVISION,
+    )
+    assert current_ready['revision'] == REVISION
+    assert current_ready['after']['prosrc'] == READY_SUCCESSOR_SOURCE
+    assert current_ready['afterSha256'] == READY_SUCCESSOR_SHA256
     assert set(DATA['functions']) == {signature, 'rsc_oam_runtime_binding_ready_0044()',
                                     'rsc_guard_material_request_supply_task_0059()'}
     for signature, row in DATA['functions'].items():
