@@ -7238,6 +7238,8 @@ def validate_production_database_security(
             ).mappings().all()
             audit_heads = connection.execute(_AUDIT_HEAD_SQL).mappings().all()
             audit_events = connection.execute(_AUDIT_EVENT_SQL).mappings().all()
+    except DatabaseSecurityBoundaryError:
+        raise
     except Exception:
         raise DatabaseSecurityBoundaryError(
             "production database security evidence could not be verified"
