@@ -1217,9 +1217,14 @@ OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0174 = {
     'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0173['rsc_oam_runtime_binding_ready_0044()'][:-1], '324a2d97eb93d06c53cc31914a5344526ff2a20e38d4c04418ebb3cdfd277a5e'),
 }
 
-OAM_SYNC_FUNCTION_MANIFEST = {
+OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0181 = {
     **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0174,
     'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0174['rsc_oam_runtime_binding_ready_0044()'][:-1], 'beaeca9daa8c2f3d9407358d08d28a28554b7abf1a63a27fed622833fee7554f'),
+}
+
+OAM_SYNC_FUNCTION_MANIFEST = {
+    **OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0181,
+    'rsc_oam_runtime_binding_ready_0044()': (*OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0181['rsc_oam_runtime_binding_ready_0044()'][:-1], 'ef75d309aef163ecec39455cb3ceef84d7dccccbea94b819084727c1e5591682'),
 }
 
 EXPECTED_TRIGGERS = (

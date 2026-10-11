@@ -4832,11 +4832,12 @@ from . import key_provider_readiness_security as _key_provider_readiness_catalog
 _key_provider_readiness_catalog.overlay(_stock_scrap_readiness)
 from . import material_request_contact_envelope_security as _contact_envelope_catalog
 _contact_envelope_catalog.overlay(_stock_scrap_readiness)
+from . import condition_notification_lock_security as _condition_notification_lock_scope
+_condition_notification_lock_scope.overlay(_stock_scrap_readiness)
 _stock_scrap_catalog.register(globals())
 _stock_scrap_readiness.register(globals())
 from . import return_condition_security as _condition_catalog
 _condition_catalog.register(globals())
-from . import condition_notification_lock_security as _condition_notification_lock_scope
 _condition_notification_lock_scope.register(globals())
 _shipment_projection_catalog.register(globals())
 from . import material_request_closure_security as _closure_catalog

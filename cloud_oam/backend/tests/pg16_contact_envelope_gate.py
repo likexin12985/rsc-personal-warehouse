@@ -66,6 +66,30 @@ def rows(db, tables):
         ' AS t ORDER BY to_jsonb(t)::text')).scalars().all() for table in tables}
 
 
+def current_catalog_data(data):
+    """Derive the immutable 0181 expectation for the 0182 successor head."""
+    from app.condition_notification_lock_security import (
+        READY_SUCCESSOR_SOURCE,
+    )
+
+    current = deepcopy(data)
+    current['revision'] = HEAD
+    current['observed_function_names'] = sorted(set(
+        current['observed_function_names']
+        + ['rsc_condition_decision_seal_lock']
+    ))
+    functions = current['catalog']['functions']['after']
+    ready = functions['rsc_oam_runtime_binding_ready_0044()']
+    legacy_source = ready['prosrc']
+    ready['prosrc'] = READY_SUCCESSOR_SOURCE
+    ready['definition'] = ready['definition'].replace(legacy_source, READY_SUCCESSOR_SOURCE, 1)
+    current['catalog']['functions']['after']['rsc_condition_decision_seal_lock()'] = deepcopy(
+        json.loads((WORKSPACE / 'alembic/condition_notification_lock_scope_0182/functions.json').read_text())
+        ['functions']['rsc_condition_decision_seal_lock()']['after']
+    )
+    return current
+
+
 def summary(snapshot):
     return {name: dict(count=len(values), sha256=digest(json.dumps(values, ensure_ascii=False,
         separators=(',', ':')).encode())) for name, values in snapshot.items()}
@@ -87,15 +111,34 @@ def exact_catalog(db, data, side):
     return digest(json.dumps(actual, sort_keys=True, separators=(',', ':')).encode())
 
 
-def online_step(db, configuration, scripts, up):
+def online_step_0181(db, configuration, scripts, up):
     from alembic.runtime.environment import EnvironmentContext
-    before, target = (OLD, HEAD) if up else (HEAD, OLD)
+    before, target = (OLD, '20261230_0181') if up else ('20261230_0181', OLD)
     head(db, before)
     def revisions(current, context):
-        require(tuple(current) == (before,), 'focus_start_head')
+        require(tuple(current) == (before,), 'focus_start_head_0181')
+        steps = list(scripts._upgrade_revs(target, current) if up else scripts._downgrade_revs(target, current))
+        require(len(steps) == 1 and steps[0].revision.revision == '20261230_0181'
+            and steps[0].is_upgrade is up and steps[0].from_revisions == (before,)
+            and steps[0].to_revisions == (target,), 'one_0181_step')
+        return steps
+    with EnvironmentContext(configuration, scripts, fn=revisions, as_sql=False, destination_rev=target) as env:
+        env.configure(connection=db, version_table_schema='public', transaction_per_migration=False)
+        with env.begin_transaction():
+            env.run_migrations()
+    head(db, target)
+    return dict(fromRevision=before, toRevision=target, onlineAlembic=True)
+
+
+def online_step_0182(db, configuration, scripts, up):
+    from alembic.runtime.environment import EnvironmentContext
+    before, target = ('20261230_0181', HEAD) if up else (HEAD, '20261230_0181')
+    head(db, before)
+    def revisions(current, context):
+        require(tuple(current) == (before,), 'focus_start_head_0182')
         steps = list(scripts._upgrade_revs(target, current) if up else scripts._downgrade_revs(target, current))
         require(len(steps) == 1 and steps[0].revision.revision == HEAD and steps[0].is_upgrade is up
-            and steps[0].from_revisions == (before,) and steps[0].to_revisions == (target,), 'one_0181_step')
+            and steps[0].from_revisions == (before,) and steps[0].to_revisions == (target,), 'one_0182_step')
         return steps
     with EnvironmentContext(configuration, scripts, fn=revisions, as_sql=False, destination_rev=target) as env:
         env.configure(connection=db, version_table_schema='public', transaction_per_migration=False)
@@ -398,7 +441,10 @@ def downgrade_blocked(owner, configuration, scripts, label):
             limits(db)
             db.execute(text('SET LOCAL search_path=pg_catalog,public'))
             try:
-                online_step(db, configuration, scripts, False)
+                # 0182 must first downgrade cleanly; the historical 0181
+                # blocker then refuses the v2 contact history.
+                online_step_0182(db, configuration, scripts, False)
+                online_step_0181(db, configuration, scripts, False)
             except ValueError as error:
                 require(str(error) == 'cannot downgrade 0181 while non-v1 contact history exists',
                     'exact_downgrade_blocker')
@@ -418,10 +464,11 @@ def migration_writer_lock_proof(owner, api, configuration, scripts, data, reques
     from time import monotonic
     from sqlalchemy.exc import DBAPIError
 
+    current = current_catalog_data(data)
     relevant = BUSINESS_TABLES + PIN_TABLES + INVENTORY_TABLES
     with owner.connect() as db:
         before = rows(db, relevant)
-        exact_catalog(db, data, 'after')
+        exact_catalog(db, current, 'after')
     pids = Queue(maxsize=1)
     cadence = Event()
 
@@ -463,11 +510,13 @@ def migration_writer_lock_proof(owner, api, configuration, scripts, data, reques
             try:
                 limits(db)
                 leader = db.scalar(text('SELECT pg_backend_pid()'))
-                # Both are real one-revision Alembic operations. The final
-                # installed guard is 0181 and its locks remain until COMMIT.
-                online_step(db, configuration, scripts, False)
-                online_step(db, configuration, scripts, True)
-                exact_catalog(db, data, 'after')
+                # Walk the real 0182 and 0181 single-revision operations down
+                # and back up. The 0181 contact locks remain held until COMMIT.
+                online_step_0182(db, configuration, scripts, False)
+                online_step_0181(db, configuration, scripts, False)
+                online_step_0181(db, configuration, scripts, True)
+                online_step_0182(db, configuration, scripts, True)
+                exact_catalog(db, current, 'after')
                 future = pool.submit(writer)
                 follower = pids.get(timeout=5)
                 require(follower != leader, 'independent_migration_writer_connections')
@@ -497,7 +546,7 @@ def migration_writer_lock_proof(owner, api, configuration, scripts, data, reques
         pool.shutdown(wait=True)
     with owner.connect() as db:
         head(db, HEAD)
-        exact_catalog(db, data, 'after')
+        exact_catalog(db, current, 'after')
         require(rows(db, relevant) == before, 'migration_writer_fresh_rollback_readback')
     return result | dict(blockingPidObserved=True, actualAlembicLock=True, factsUnchanged=True)
 
@@ -568,6 +617,7 @@ def run(owner, api, *, upgrade_to_head, validate_runtime, resume_predecessor=Fal
                 'FROM pg_roles WHERE rolname=current_user')).one()), 'unprivileged_' + role)
     migration = runpy.run_path(str(WORKSPACE / 'backend/alembic/versions/20261230_0181_material_request_contact_v2.py'))
     data = migration['DATA']
+    current = current_catalog_data(data)
     require(type(resume_predecessor) is bool, 'explicit_predecessor_resume')
     with owner.connect() as db:
         limits(db); head(db, OLD); exact_catalog(db, data, 'before')
@@ -591,7 +641,7 @@ def run(owner, api, *, upgrade_to_head, validate_runtime, resume_predecessor=Fal
             for name in BUSINESS_TABLES for row in before[name]), 'only_v1_predecessor_rows')
     upgrade_to_head()
     with owner.connect() as db:
-        head(db, HEAD); exact_catalog(db, data, 'after')
+        head(db, HEAD); exact_catalog(db, current, 'after')
         require(rows(db, BUSINESS_TABLES + PIN_TABLES) == before, 'upgrade_preserves_v1_and_pins')
     report['v1UpgradePreserved'] = True
     with ExitStack() as stack:
@@ -609,14 +659,16 @@ def run(owner, api, *, upgrade_to_head, validate_runtime, resume_predecessor=Fal
                 db.execute(text('SET LOCAL search_path=pg_catalog,public'))
                 txid = db.scalar(text('SELECT txid_current()'))
                 require(db.scalar(text('SELECT current_schema()')) == 'pg_catalog', 'catalog_first_focus')
-                online_step(db, configuration, scripts, False); exact_catalog(db, data, 'before')
-                online_step(db, configuration, scripts, True); exact_catalog(db, data, 'after')
+                online_step_0182(db, configuration, scripts, False)
+                online_step_0181(db, configuration, scripts, False); exact_catalog(db, data, 'before')
+                online_step_0181(db, configuration, scripts, True)
+                online_step_0182(db, configuration, scripts, True); exact_catalog(db, current, 'after')
                 require(db.scalar(text('SELECT txid_current()')) == txid and transaction.is_active, 'one_outer_transaction')
                 require(rows(db, BUSINESS_TABLES + PIN_TABLES) == before, 'roundtrip_preserves_rows')
             finally:
                 transaction.rollback()
         with owner.connect() as db:
-            head(db, HEAD); exact_catalog(db, data, 'after')
+            head(db, HEAD); exact_catalog(db, current, 'after')
             require(rows(db, BUSINESS_TABLES + PIN_TABLES) == before, 'fresh_outer_rollback_readback')
         report['transactionalRoundtrip'] = True
         report['migrationWriterLock'] = migration_writer_lock_proof(owner, api, configuration, scripts, data, request_id)
@@ -635,7 +687,7 @@ def run(owner, api, *, upgrade_to_head, validate_runtime, resume_predecessor=Fal
             current_v2 = rows(db, BUSINESS_TABLES + PIN_TABLES)
         report['downgradeCurrentV2'] = downgrade_blocked(owner, configuration, scripts, 'current-v2')
         with owner.connect() as db:
-            head(db, HEAD); exact_catalog(db, data, 'after')
+            head(db, HEAD); exact_catalog(db, current, 'after')
             require(rows(db, BUSINESS_TABLES + PIN_TABLES) == current_v2, 'current_v2_refusal_exact_readback')
         v2_revision, version = submit_return(api, context, request_id, prefix + '-v2')
         retained_v2 = revision_bytes(owner, v2_revision)
@@ -649,7 +701,7 @@ def run(owner, api, *, upgrade_to_head, validate_runtime, resume_predecessor=Fal
             history_v2 = rows(db, BUSINESS_TABLES + PIN_TABLES)
         report['downgradeOldV2History'] = downgrade_blocked(owner, configuration, scripts, 'only-old-v2-history')
         with owner.connect() as db:
-            head(db, HEAD); exact_catalog(db, data, 'after')
+            head(db, HEAD); exact_catalog(db, current, 'after')
             require(rows(db, BUSINESS_TABLES + PIN_TABLES) == history_v2, 'historical_v2_refusal_exact_readback')
         pure_id, pure = create_request(api, context, prefix + '-v2-create', True)
         with owner.connect() as db:
@@ -659,7 +711,7 @@ def run(owner, api, *, upgrade_to_head, validate_runtime, resume_predecessor=Fal
                 'pure_v2_revision_insert')
         validate_runtime()
         with owner.connect() as db:
-            head(db, HEAD); exact_catalog(db, data, 'after')
+            head(db, HEAD); exact_catalog(db, current, 'after')
             require(rows(db, PIN_TABLES) == expected_pins, 'immutable_pins_final_readback')
             require(revision_bytes(owner, old_revision_id) == old_sealed, 'immutable_v1_final_readback')
             require(revision_bytes(owner, v2_revision) == retained_v2, 'immutable_v2_final_readback')

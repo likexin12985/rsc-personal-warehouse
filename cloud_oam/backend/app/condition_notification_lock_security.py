@@ -82,76 +82,44 @@ def verify_successor_source(source: str) -> None:
         raise ValueError("0182 successor condition-seal lock source mismatch")
 
 
+def overlay(previous):
+    """Select 0182 before shared readiness registration builds its catalogs."""
+    data = previous.DATA
+    if (data.get('revision') != '20261230_0181'
+            or data.get('after') != _READY_DATA
+            or data.get('afterSha256') != READY_LEGACY_SHA256):
+        raise ValueError('0182 exact readiness predecessor not admitted')
+    updated = deepcopy(data)
+    after = updated['after']
+    after['prosrc'] = READY_SUCCESSOR_SOURCE
+    after['definition'] = after['definition'].replace(READY_SOURCE, READY_SUCCESSOR_SOURCE, 1)
+    updated.update(afterSha256=READY_SUCCESSOR_SHA256, revision=REVISION)
+    previous.DATA = updated
+
+
 def register(namespace):
-    """Publish the successor digest in the read-only runtime registry."""
+    """Validate both predecessor views, then publish only the lock successor.
+
+    Shared readiness belongs to the existing readiness registration chain.
+    Updating its manifest here would leave already-rendered Edge/projector
+    SQL and independent catalogs bound to the previous revision.
+    """
     registry = namespace.get('FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256')
     coordinate = ('rsc_condition_decision_seal_lock', '')
-    if type(registry) is not dict or registry.get(coordinate) not in (
-            LEGACY_SHA256, SUCCESSOR_SHA256):
+    if type(registry) is not dict or registry.get(coordinate) != LEGACY_SHA256:
         raise ValueError('0182 condition-seal predecessor digest not admitted')
-    condition_catalog = namespace.get('_condition_catalog')
-    if condition_catalog is None or not isinstance(condition_catalog.DATA, dict):
+    catalog = namespace.get('_condition_catalog')
+    if catalog is None or not isinstance(catalog.DATA, dict):
         raise ValueError('0182 condition catalog predecessor not admitted')
-    condition_data = deepcopy(condition_catalog.DATA)
-    condition_row = condition_data.get('functions', {}).get(
-        'rsc_condition_decision_seal_lock()')
-    if not isinstance(condition_row, dict):
-        raise ValueError('0182 condition catalog function predecessor not admitted')
-    condition_after = condition_row.get('after')
-    if not isinstance(condition_after, dict) \
-            or condition_after.get('prosrc') != LEGACY_SOURCE \
-            or sha256(condition_after['prosrc'].encode()).hexdigest() != LEGACY_SHA256:
-        raise ValueError('0182 condition catalog function source predecessor not admitted')
-    successor_after = deepcopy(condition_after)
-    successor_after['prosrc'] = SUCCESSOR_SOURCE
-    definition = successor_after.get('definition')
-    if not isinstance(definition, str) or definition.count(LEGACY_SOURCE) != 1:
-        raise ValueError('0182 condition catalog function definition predecessor not admitted')
-    successor_after['definition'] = definition.replace(LEGACY_SOURCE, SUCCESSOR_SOURCE, 1)
-    condition_row['after'] = successor_after
+    updated = deepcopy(catalog.DATA)
+    row = updated.get('functions', {}).get(SIGNATURE)
+    if not isinstance(row, dict) or row.get('after') != _CONDITION_DATA['functions'][SIGNATURE]['after']:
+        raise ValueError('0182 exact condition function predecessor not admitted')
+    after = row['after']
+    if after['definition'].count(LEGACY_SOURCE) != 1:
+        raise ValueError('0182 condition function definition predecessor not admitted')
+    after['prosrc'] = SUCCESSOR_SOURCE
+    after['definition'] = after['definition'].replace(LEGACY_SOURCE, SUCCESSOR_SOURCE, 1)
+    # No publication occurs until the complete source, metadata and ACL agree.
     registry[coordinate] = SUCCESSOR_SHA256
-    manifest = namespace.get('OAM_SYNC_FUNCTION_MANIFEST')
-    current = manifest.get(READY_SIGNATURE) if isinstance(manifest, dict) else None
-    if not isinstance(current, tuple) or current[-1] != READY_LEGACY_SHA256:
-        raise ValueError('0182 readiness predecessor manifest not admitted')
-    manifest[READY_SIGNATURE] = (*current[:-1], READY_SUCCESSOR_SHA256)
-    oam_hashes = namespace.get('OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256')
-    ready_coordinate = ('rsc_oam_runtime_binding_ready_0044', '')
-    if type(oam_hashes) is not dict or oam_hashes.get(ready_coordinate) != READY_LEGACY_SHA256:
-        raise ValueError('0182 readiness digest registry not admitted')
-    oam_hashes[ready_coordinate] = READY_SUCCESSOR_SHA256
-    readiness = namespace.get('_stock_scrap_readiness')
-    if readiness is None or readiness.DATA.get('revision') != '20261230_0181':
-        raise ValueError('0182 readiness runtime predecessor not admitted')
-    ready_data = dict(readiness.DATA)
-    ready_after = dict(ready_data['after'])
-    ready_after['prosrc'] = READY_SUCCESSOR_SOURCE
-    ready_after['definition'] = _READY_DATA['definition'].replace(
-        '20261230_0181', REVISION, 1)
-    ready_data['after'] = ready_after
-    ready_data['afterSha256'] = READY_SUCCESSOR_SHA256
-    ready_data['revision'] = REVISION
-    loss_return_stop_catalog = namespace.get('_loss_return_stop_catalog')
-    if loss_return_stop_catalog is None or not isinstance(loss_return_stop_catalog.DATA, dict):
-        raise ValueError('0182 loss-return-stop catalog predecessor not admitted')
-    loss_return_stop_data = deepcopy(loss_return_stop_catalog.DATA)
-    readiness_rows = [
-        row for family in ('newFunctions', 'replacedFunctions')
-        for row in loss_return_stop_data.get(family, [])
-        if row.get('signature') == READY_SIGNATURE
-    ]
-    if len(readiness_rows) != 1:
-        raise ValueError('0182 loss-return-stop readiness predecessor not admitted')
-    loss_readiness = readiness_rows[0]
-    if (loss_readiness.get('prosrc') != READY_SOURCE
-            or loss_readiness.get('prosrcSha256') != READY_LEGACY_SHA256
-            or not isinstance(loss_readiness.get('definition'), str)
-            or loss_readiness['definition'].count(READY_SOURCE) != 1):
-        raise ValueError('0182 loss-return-stop readiness source predecessor not admitted')
-    loss_readiness['prosrc'] = READY_SUCCESSOR_SOURCE
-    loss_readiness['definition'] = loss_readiness['definition'].replace(
-        READY_SOURCE, READY_SUCCESSOR_SOURCE, 1)
-    loss_readiness['prosrcSha256'] = READY_SUCCESSOR_SHA256
-    readiness.DATA = ready_data
-    condition_catalog.DATA = condition_data
-    loss_return_stop_catalog.DATA = loss_return_stop_data
+    catalog.DATA = updated

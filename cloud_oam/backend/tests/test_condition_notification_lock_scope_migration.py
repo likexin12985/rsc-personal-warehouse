@@ -66,6 +66,14 @@ def test_runtime_condition_catalog_overlay_admits_successor_source():
     assert len(readiness_rows) == 1
     assert readiness_rows[0]['prosrc'] == m['READY_SOURCE']
     assert readiness_rows[0]['prosrcSha256'] == m['READY_HASH']
+    auth_rows = [
+        patch for patch in database_security._authentication_fence_catalog.DATA['patches']
+        if patch['after']['signature'] == m['READY_SIGNATURE'].removeprefix('public.')
+    ]
+    assert len(auth_rows) == 1
+    assert auth_rows[0]['after']['prosrc'] == m['READY_SOURCE']
+    assert database_security.OAM_SYNC_RUNTIME_FUNCTION_BODY_SHA256[
+        ('rsc_oam_runtime_binding_ready_0044', '')] == m['READY_HASH']
 
 
 @pytest.mark.parametrize('direction', ['upgrade', 'downgrade'])

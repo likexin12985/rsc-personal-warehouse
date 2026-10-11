@@ -15,9 +15,13 @@ def test_runtime_registration_advances_contact_guards_and_shared_readiness_toget
     from app.material_request_contact_envelope_security import DATA
     from app.daily_reconciliation.capture_provisioning import REQUIRED_HEAD
 
-    ready = database_security._stock_scrap_readiness.DATA
-    assert ready['revision'] == DATA['revision'] == REQUIRED_HEAD == '20261230_0181'
-    assert ready['after'] == DATA['readiness']['after']
+    # 0181 admission is a historical proof.  The shared runtime readiness is
+    # deliberately overlaid to 0182 during current-head import, so this test
+    # must read the immutable 0181 catalog instead of mutable runtime DATA.
+    ready = DATA['readiness']
+    assert DATA['revision'] == '20261230_0181'
+    assert REQUIRED_HEAD == '20261231_0182'
+    assert ready['revision'] == DATA['revision']
     frozen = json.loads((ROOT / 'alembic/contact_envelope_0181/catalog.json').read_text())
     # Runtime preserves its predecessor list order; the real catalog probe
     # sorts ACL entries. Compare every entry and every other metadata field.
@@ -28,7 +32,7 @@ def test_runtime_registration_advances_contact_guards_and_shared_readiness_toget
             row['acl'] = sorted(row['acl'], key=lambda grant: (grant['grantee'], grant['privilege'], grant['grantable']))
         assert runtime == observed
     signature = 'rsc_oam_runtime_binding_ready_0044()'
-    assert oam_sync_scope_security.OAM_SYNC_FUNCTION_MANIFEST[signature][-1] == ready['afterSha256']
+    assert oam_sync_scope_security.OAM_SYNC_FUNCTION_MANIFEST_THROUGH_0181[signature][-1] == ready['afterSha256']
     for signature, row in DATA['functions'].items():
         assert database_security.MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256[
             (signature[:-2], '')] == row['afterSha256']
