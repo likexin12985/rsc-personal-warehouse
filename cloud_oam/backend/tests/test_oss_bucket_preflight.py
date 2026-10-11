@@ -206,11 +206,21 @@ def test_worker_output_is_allowlisted_not_forwarded(probe, output):
 def test_all_bucket_checks_do_not_claim_identity_object_backup_or_release(probe):
     checks = dict.fromkeys(probe.CHECKS, "passed")
     result = probe.inspect_runtime(REGION, BUCKET, OWNER,
-        runner=lambda *a, **k: SimpleNamespace(returncode=0, stdout=json.dumps(checks), stderr=MARKER))
+        runner=lambda *a, **k: SimpleNamespace(returncode=0, stdout=json.dumps(checks), stderr=""))
     assert result["bucketConfigurationVerified"]
     for key in ("credentialRefreshVerified", "objectRoundTripVerified", "httpsPolicyVerified", "corsVerified", "backupRestoreVerified", "releaseReady"):
         assert result[key] is False
     assert BUCKET not in json.dumps(result) and OWNER not in json.dumps(result)
+
+
+def test_worker_diagnostics_on_stderr_do_not_count_as_bucket_pass(probe):
+    checks = dict.fromkeys(probe.CHECKS, "passed")
+    result = probe.inspect_runtime(REGION, BUCKET, OWNER,
+        runner=lambda *a, **k: SimpleNamespace(returncode=0,
+            stdout=json.dumps(checks), stderr=MARKER))
+    assert result["probeStatus"] == "worker_unavailable"
+    assert not result["bucketConfigurationVerified"]
+    assert MARKER not in json.dumps(result)
 
 
 def test_default_help_does_not_touch_sdk_credentials_or_environment(probe, monkeypatch, capsys):

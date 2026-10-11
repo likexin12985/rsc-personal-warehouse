@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import hashlib
 import ipaddress
 import json
 import os
@@ -56,6 +57,18 @@ KMS_ENDPOINT_RE = re.compile(
 )
 PILOT_PROJECT_RE = re.compile(r"^rsc-pilot-[a-z0-9][a-z0-9_-]{0,47}$")
 IMAGE_TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
+METADATA_NETWORK_KEY = "metadata_public"
+METADATA_NETWORK_NAME = "rsc-openbao-metadata"
+METADATA_LABEL_PREFIX = "rsc.pilot.metadata."
+METADATA_REQUIRED_LABELS = {
+    "network-id", "container-id", "image-id", "started-at", "gateway-sha256", "binary-sha256",
+}
+METADATA_ALLOWED_LABELS = METADATA_REQUIRED_LABELS | {
+    "legacy-web-container-id", "legacy-web-image-id", "legacy-web-started-at",
+}
+FULL_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DATABASE_URL_RE = re.compile(
     r"postgresql\+psycopg://(?P<role>[^:/?#@\s]+):"
     r"(?P<password>[^@/?#\s]+)@db:5432/(?P<database>[^/?#\s]+)"
@@ -84,6 +97,11 @@ def private_oss_oidc_configured(api: dict) -> bool:
                 "ALIBABA_CLOUD_ACCESS_KEY_ID", "ALIBABA_CLOUD_ACCESS_KEY_SECRET", "ALIBABA_CLOUD_SECURITY_TOKEN",
                 "OAM_FILE_STORAGE_ACCESS_KEY_ID", "OAM_FILE_STORAGE_ACCESS_KEY_SECRET", "OAM_FILE_STORAGE_SESSION_TOKEN"))):
         return False
+    expected_accounts = [environment.get(key, "") for key in (
+        "RSC_OIDC_EXPECTED_ACCOUNT_ID", "RSC_OSS_PREFLIGHT_OWNER_ID",
+        "OAM_FILE_STORAGE_BUCKET_OWNER_ID")]
+    if any(expected and expected != role[1] for expected in expected_accounts):
+        return False
     parent = str(PurePosixPath(token).parent)
     mounts = api.get("volumes", [])
     if not isinstance(mounts, list) or any(not isinstance(item, dict) for item in mounts):
@@ -96,6 +114,7 @@ def private_oss_oidc_configured(api: dict) -> bool:
     source = mount.get("source", "")
     return (mount.get("target") == parent and parent != "/run"
             and mount.get("type") == "bind" and mount.get("read_only") is True
+            and bind_disables_host_path_creation(mount)
             and isinstance(source, str) and source.startswith("/run/")
             and str(PurePosixPath(source)) == source and ".." not in PurePosixPath(source).parts
             and not any(ord(c) < 33 or ord(c) == 127 for c in source))
@@ -390,7 +409,102 @@ def restricted_process_configuration(service, *, inspected=False):
     drop, add, privileged, options = (service.get(key) for key in fields)
     return (drop == ["ALL"] and not add and (privileged is False if inspected else privileged in (None, False))
             and isinstance(options, list) and len(options) == 1
-            and options[0] in ("no-new-privileges=true", "no-new-privileges:true"))
+            and options[0] in ("no-new-privileges", "no-new-privileges=true", "no-new-privileges:true"))
+
+
+def _metadata_labels(service):
+    """Return the closed, non-secret metadata declaration from a web service."""
+    raw = service.get("labels", {}) if isinstance(service, dict) else {}
+    if isinstance(raw, list):
+        if any(not isinstance(item, str) or "=" not in item for item in raw):
+            raise ValueError("metadata_labels_invalid")
+        parsed = {}
+        for item in raw:
+            key, value = item.split("=", 1)
+            if key in parsed:
+                raise ValueError("metadata_labels_invalid")
+            parsed[key] = value
+        raw = parsed
+    if not isinstance(raw, dict):
+        raise ValueError("metadata_labels_invalid")
+    result = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not key.startswith(METADATA_LABEL_PREFIX):
+            continue
+        suffix = key[len(METADATA_LABEL_PREFIX):]
+        if suffix not in METADATA_ALLOWED_LABELS or suffix in result:
+            raise ValueError("metadata_labels_invalid")
+        if not isinstance(value, str):
+            raise ValueError("metadata_labels_invalid")
+        result[suffix] = value
+    return result
+
+
+def metadata_peer_declaration(document):
+    """Validate the optional metadata peer declaration without Docker I/O.
+
+    An absent metadata network and absent metadata labels preserve the existing
+    pilot contract. Once either appears, the declaration is closed and every
+    immutable value is required; names, short IDs and guessed peers are never
+    accepted.
+    """
+    services = document.get("services", {})
+    networks = document.get("networks", {})
+    web = services.get("web", {}) if isinstance(services, dict) else {}
+    labels = _metadata_labels(web)
+    network = networks.get(METADATA_NETWORK_KEY) if isinstance(networks, dict) else None
+    attached = web.get("networks", {}) if isinstance(web, dict) else {}
+    has_marker = bool(labels) or network is not None or (
+        isinstance(attached, dict) and METADATA_NETWORK_KEY in attached)
+    if not has_marker:
+        return None
+    if (not isinstance(network, dict) or network.get("external") is not True
+            or network.get("name") != METADATA_NETWORK_NAME):
+        raise ValueError("metadata_network_declaration_invalid")
+    if (not isinstance(attached, dict) or METADATA_NETWORK_KEY not in attached
+            or any(isinstance(item, dict) and METADATA_NETWORK_KEY in (item.get("networks") or {})
+                   for name, item in services.items() if name != "web")):
+        raise ValueError("metadata_network_attachment_invalid")
+    if set(labels) != METADATA_REQUIRED_LABELS and not set(labels) >= METADATA_REQUIRED_LABELS:
+        raise ValueError("metadata_labels_incomplete")
+    cutover = {key for key in labels if key.startswith("legacy-web-")}
+    if cutover and cutover != {"legacy-web-container-id", "legacy-web-image-id", "legacy-web-started-at"}:
+        raise ValueError("metadata_cutover_labels_incomplete")
+    if cutover and (FULL_ID_RE.fullmatch(labels["legacy-web-container-id"]) is None
+                    or IMAGE_ID_RE.fullmatch(labels["legacy-web-image-id"]) is None
+                    or re.fullmatch(r"[1-9][0-9]{3}-[0-9TZ:.+\-]+", labels["legacy-web-started-at"]) is None):
+        raise ValueError("metadata_cutover_labels_invalid")
+    if any(not isinstance(labels[key], str) for key in METADATA_REQUIRED_LABELS):
+        raise ValueError("metadata_labels_invalid")
+    if (FULL_ID_RE.fullmatch(labels["network-id"]) is None
+            or FULL_ID_RE.fullmatch(labels["container-id"]) is None
+            or IMAGE_ID_RE.fullmatch(labels["image-id"]) is None
+            or SHA256_RE.fullmatch(labels["gateway-sha256"]) is None
+            or SHA256_RE.fullmatch(labels["binary-sha256"]) is None
+            or re.fullmatch(r"[1-9][0-9]{3}-[0-9TZ:.+\-]+", labels["started-at"]) is None):
+        raise ValueError("metadata_labels_invalid")
+    mounts = web.get("volumes", [])
+    caddy = [item for item in mounts if isinstance(item, dict)
+             and item.get("target") == "/etc/caddy/Caddyfile"]
+    if len(caddy) != 1:
+        raise ValueError("metadata_caddy_mount_invalid")
+    mount = caddy[0]
+    source = mount.get("source")
+    if (not isinstance(source, str)
+            or re.fullmatch(r"/etc/rsc-pilot-public/[0-9a-f]{64}/Caddyfile", source) is None
+            or mount.get("type") != "bind"
+            or mount.get("read_only") is not True
+            or not bind_disables_host_path_creation(mount)
+            or mount.get("bind", {}).get("propagation", "rprivate") != "rprivate"):
+        raise ValueError("metadata_caddy_mount_invalid")
+    # Parent/nested binds would allow a mutable shadow of the frozen Caddy.
+    for item in mounts:
+        if not isinstance(item, dict) or item is mount:
+            continue
+        target = item.get("target", "")
+        if target == "/etc/caddy" or target.startswith("/etc/caddy/") or "/etc/caddy".startswith(str(target).rstrip("/") + "/"):
+            raise ValueError("metadata_caddy_mount_overlap")
+    return dict(labels=labels, network_name=METADATA_NETWORK_NAME, caddy_source=source)
 
 
 def openbao_peer_declaration(document):
@@ -599,6 +713,38 @@ def checks_for(document: dict[str, object], compose_file: Path, *,
     except (KeyError, TypeError, ValueError):
         return [{"name": "resolved_compose_shape", "ok": False}]
 
+    # Metadata publication is an opt-in external edge.  Its declaration is
+    # deliberately kept separate from the normal project-isolation checks so
+    # a legacy candidate with no metadata network remains valid.
+    try:
+        metadata = metadata_peer_declaration(document)
+    except (TypeError, ValueError, KeyError):
+        check("metadata_peer_declaration", False)
+        metadata = None
+    else:
+        check("metadata_peer_declaration", True)
+    if metadata is not None:
+        metadata_networks = [
+            (name, service) for name, service in services.items()
+            if isinstance(service, dict)
+            and isinstance(service.get("networks"), dict)
+            and METADATA_NETWORK_KEY in service["networks"]
+        ]
+        check("metadata_public_web_only", [name for name, _ in metadata_networks] == ["web"])
+        # A content-addressed public Caddy snapshot is the only mutable host
+        # input admitted by this edge exception.  The preflight itself must
+        # fail closed when the source is absent; otherwise a caller that uses
+        # this command as its deployment gate could receive a false pass and
+        # defer the required source check to a later, less visible stage.
+        caddy_path = Path(metadata["caddy_source"])
+        caddy_hash_ok = False
+        try:
+            caddy_hash_ok = (caddy_path.is_file() and not caddy_path.is_symlink()
+                             and hashlib.sha256(caddy_path.read_bytes()).hexdigest() == caddy_path.parent.name)
+        except OSError:
+            caddy_hash_ok = False
+        check("metadata_caddy_content_address", caddy_hash_ok)
+
     check("pilot_build_profile", build_args.get("RELEASE_PROFILE") == "pilot")
     if project_name is not None or image_tag is not None:
         tag_ok = isinstance(image_tag, str) and IMAGE_TAG_RE.fullmatch(image_tag) is not None
@@ -623,11 +769,13 @@ def checks_for(document: dict[str, object], compose_file: Path, *,
             if not isinstance(resources, dict) or not resources:
                 resources_ok = False
                 continue
-            resources_ok = resources_ok and all(
-                isinstance(value, dict) and not value.get("external")
-                and value.get("name") == f"{project_name}_{key}"
-                for key, value in resources.items()
-            )
+            def resource_ok(key, value):
+                if key == METADATA_NETWORK_KEY:
+                    return isinstance(value, dict) and metadata is not None and value.get("external") is True \
+                        and value.get("name") == METADATA_NETWORK_NAME
+                return (isinstance(value, dict) and not value.get("external")
+                        and value.get("name") == f"{project_name}_{key}")
+            resources_ok = resources_ok and all(resource_ok(key, value) for key, value in resources.items())
         resources_ok = resources_ok and all(
             isinstance(service, dict) and not service.get("container_name")
             for service in services.values()
@@ -683,7 +831,10 @@ def checks_for(document: dict[str, object], compose_file: Path, *,
           and api_env.get("OAM_SMS_SCHEME_NAME") == PILOT_SMS_SCHEME_NAME
           and sms_sts_configured(api_env))
     check("sms_static_credentials_empty", sms_default_credential_chain_configured(api_env))
-    if any(pnvs_oidc_declared(service_env(service)) for service in services.values()):
+    pnvs_provider_requires_oidc = api_env.get("OAM_SMS_PROVIDER") == "aliyun_pnvs"
+    check("pnvs_oidc_declared_for_provider",
+          not pnvs_provider_requires_oidc or pnvs_oidc_declared(api_env))
+    if pnvs_provider_requires_oidc or any(pnvs_oidc_declared(service_env(service)) for service in services.values()):
         for name, ok in pnvs_oidc_configuration_checks(document).items():
             check(name, ok)
     check("sms_login_rate_limits", configured(

@@ -14,7 +14,7 @@ import sys
 from unittest.mock import patch
 
 CLOUD = Path(__file__).resolve().parents[1]
-HEAD = '20261230_0181'
+HEAD = '20261231_0182'
 
 
 def main(argv=None):

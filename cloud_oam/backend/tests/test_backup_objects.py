@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import os
 import socket
 import tarfile
 from urllib.parse import urlsplit, parse_qs
@@ -94,6 +95,7 @@ class Response(HttpResponse):
 class Transport(HttpClient):
     def __init__(self, specs):
         self.specs = specs
+        self.bucket = "synthetic-backup"
         self.calls = []
         self.responses = []
     def open(self): pass
@@ -101,7 +103,7 @@ class Transport(HttpClient):
     def send(self, request, **kwargs):
         assert request.method in {"HEAD", "GET"}
         url = urlsplit(request.url)
-        assert url.scheme == "https" and url.hostname == "synthetic-backup.oss-cn-hangzhou.aliyuncs.com"
+        assert url.scheme == "https" and url.hostname == f"{self.bucket}.oss-cn-hangzhou.aliyuncs.com"
         assert request.headers["authorization"].startswith("OSS4-HMAC-SHA256 ")
         # Never retain the Authorization or security-token headers in evidence.
         self.calls.append(dict(method=request.method, path=url.path, query=parse_qs(url.query),
@@ -324,21 +326,50 @@ def test_backup_signer_rejects_write_before_transport():
 
 def test_environment_factory_uses_same_verified_signer_and_tls(tmp_path, monkeypatch):
     import formal_object_backup as module
+    import backup_reader_identity
+    from app import oss_runtime_credentials
     row, body, headers = fixture_row()
     transport = Transport([dict(headers=headers), dict(headers=headers, body=body)])
     provider = oss.credentials.StaticCredentialsProvider("SYNTHETIC_TEST_ID", "synthetic-not-a-live-secret")
-    monkeypatch.setattr(oss.credentials, "EnvironmentVariableCredentialsProvider", lambda: provider)
+    for key in list(os.environ):
+        if key.startswith(("OAM_", "PG", "POSTGRES_", "RSC_OSS_BACKUP_")):
+            monkeypatch.delenv(key, raising=False)
+    reader_env = {
+        "RSC_BACKUP_READER_ACCOUNT_ID": "1234567890123456",
+        "RSC_BACKUP_READER_ROLE_ARN": "acs:ram::1234567890123456:role/rsc-pilot-backup-reader",
+        "RSC_BACKUP_READER_PROVIDER_ARN": "acs:ram::1234567890123456:oidc-provider/synthetic",
+        "RSC_BACKUP_READER_SESSION_NAME": "synthetic-backup-reader",
+        "RSC_BACKUP_READER_SOURCE_BUCKET": "rsc-pilot-attachments-1234567890123456",
+        "RSC_BACKUP_READER_PREFIX": "formal-files/v1/",
+        "RSC_BACKUP_READER_TOKEN_FILE": "/run/rsc-backup-reader/oidc.jwt",
+        "RSC_BACKUP_READER_WRITER": "openbao_agent_template_v1",
+        "RSC_BACKUP_READER_PROJECTOR_UID": "23206",
+        "RSC_BACKUP_READER_SHARED_GID": "23216",
+        "RSC_BACKUP_READER_WORKER_UID": "23207",
+        "RSC_BACKUP_READER_WORKER_GID": "23217",
+    }
+    for key, value in reader_env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(backup_reader_identity, "projection_metadata", lambda _: {"stable": True})
+    monkeypatch.setattr(oss_runtime_credentials, "OssOidcCredentialsProvider", lambda _: provider)
     real_client = module.sdk_client
     def inspect(config):
         assert config.signature_version == "v4" and config.region == "cn-hangzhou"
         assert config.retry_max_attempts == 1
         assert config.disable_ssl is False and config.insecure_skip_verify is False and config.enabled_redirect is False
         assert config.connect_timeout == 5 and config.readwrite_timeout == 30
-        assert config.endpoint is None and config.credentials_provider is provider
+        assert config.endpoint is None
+        assert isinstance(
+            config.credentials_provider, backup_reader_identity.GuardedBackupCredentials
+        )
+        assert config.credentials_provider.provider is provider
         config.http_client = transport
         return real_client(config)
     monkeypatch.setattr(module, "sdk_client", inspect)
-    reader = module.OssBackupReader.from_environment(region="cn-hangzhou", bucket="synthetic-backup")
+    transport.bucket = reader_env["RSC_BACKUP_READER_SOURCE_BUCKET"]
+    reader = module.OssBackupReader.from_environment(
+        region="cn-hangzhou", bucket=reader_env["RSC_BACKUP_READER_SOURCE_BUCKET"]
+    )
     capture(tmp_path, row, reader)
     assert transport.calls[1]["signed_condition"]
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from app import database_security as runtime
 from app import return_condition_security as condition
+from app import condition_notification_lock_scope_security as notification_scope
 from app import return_condition_readiness as ready
 from app import oam_sync_scope_security as oam
 from stock_scrap_registration_fixture import predecessor
@@ -28,7 +29,10 @@ def test_runtime_is_exact_readonly_projection_and_full_import_succeeds():
                    ('MATERIAL_REQUEST_APPROVAL_FUNCTION_BODY_SHA256',
                     'FORMAL_FILE_INTERNAL_FUNCTION_BODY_SHA256', 'RUNTIME_FUNCTION_BODY_SHA256')
                    if coordinate in getattr(runtime, key)]
-        assert matches == [sha256(row['prosrc'].encode()).hexdigest()]
+        expected_hash = (notification_scope.FIXED_HASH
+                         if coordinate == notification_scope.COORDINATE
+                         else sha256(row['prosrc'].encode()).hexdigest())
+        assert matches == [expected_hash]
     from migration_source_expectations import current_source_body
     assert runtime._stock_scrap_readiness.DATA['after']['prosrc'] == current_source_body(
         ready.DATA['revision'], 'public.'+ready.DATA['after']['signature'], ready.DATA['after']['prosrc'])

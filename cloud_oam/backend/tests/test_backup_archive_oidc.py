@@ -318,7 +318,11 @@ def test_real_sdk_configuration_disables_retries_redirects_and_keeps_verificatio
     transports = []; configs = []
     monkeypatch.setattr(archive, 'writer_credentials', lambda _: object())
     monkeypatch.setattr(oss.transport, 'RequestsHttpClient', lambda **kw: transports.append(kw) or object())
-    monkeypatch.setattr(oss, 'Client', lambda config: configs.append(config) or object())
+    def fake_client(config, **kwargs):
+        assert set(kwargs) == {'signer'}
+        configs.append(config)
+        return object()
+    monkeypatch.setattr(oss, 'Client', fake_client)
     archive.make_client('key', False)
     assert transports == [dict(connect_timeout=3, readwrite_timeout=30, enabled_redirect=False, insecure_skip_verify=False)]
     assert configs[0].retry_max_attempts == 1 and configs[0].enabled_redirect is False

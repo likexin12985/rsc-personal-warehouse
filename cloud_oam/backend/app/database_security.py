@@ -4836,6 +4836,8 @@ _stock_scrap_catalog.register(globals())
 _stock_scrap_readiness.register(globals())
 from . import return_condition_security as _condition_catalog
 _condition_catalog.register(globals())
+from . import condition_notification_lock_security as _condition_notification_lock_scope
+_condition_notification_lock_scope.register(globals())
 _shipment_projection_catalog.register(globals())
 from . import material_request_closure_security as _closure_catalog
 _closure_catalog.register(globals())

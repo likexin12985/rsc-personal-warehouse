@@ -165,11 +165,16 @@ class Deployment:
         self.log=tmp_path/'commands.jsonl'
         self.env={'PATH':str(binary)+os.pathsep+'/usr/bin:/bin',
             'PILOT_COMPOSE_PROJECT':'rsc-pilot-test','SMOKE_BASE_URL':'https://rscwz.cn',
+            'SMOKE_RESOLVE_HOST':'rscwz.cn','SMOKE_RESOLVE_IP':'192.0.2.10',
             'PILOT_IMAGE_TAG':'test-candidate','PILOT_ENV_FILE':str(self.root/'.env'),
             'PILOT_STATE_DIR':str(tmp_path/'private-state'),'FAKE_CONFIG':str(self.config),
             'FAKE_STATE':str(self.state),'FAKE_LOG':str(self.log),'FAKE_ROOT':str(self.root),
             'FAKE_FAIL':'','FAKE_PORTS':'','FAKE_SS':'','FAKE_READY':str(tmp_path/'child-ready'),
-            'FAKE_NETWORKS':json.dumps([{'Id':'existing-network-id','Name':'bridge','IPAM':{'Config':[]}}])}
+            'FAKE_NETWORKS':json.dumps([
+                {'Id':'existing-network-id','Name':'rsc-pilot-test_backend','Driver':'bridge','Scope':'local','Internal':False,
+                 'Labels':{'com.docker.compose.project':'rsc-pilot-test','com.docker.compose.network':'backend'},
+                 'IPAM':{'Config':[{'Subnet':'172.18.0.0/16'}]}},
+            ])}
         self.receipt=tmp_path/'private-state/rsc-pilot-test/receipts/test-candidate.json'
 
     def command(self, action): return ['sh',str(self.root/'scripts/deploy_pilot.sh'),action]
@@ -339,14 +344,17 @@ def test_invalid_network_inspection_blocks_prepare(tmp_path,networks,error):
 def test_other_network_subnet_overlap_is_rejected_even_if_no_containers(tmp_path, subnet):
     document, _ = deployment_document(tmp_path)
     existing = [{"Name": "old_backend", "IPAM": {"Config": [{"Subnet": subnet}]}, "Containers": {}}]
-    assert check_networks(document, existing, "rsc-pilot-test") == ["docker_subnet_overlap"]
+    errors = check_networks(document, existing, "rsc-pilot-test")
+    assert "docker_subnet_overlap" in errors
+    assert "existing_pilot_network_missing" in errors
 
 
 def test_disjoint_networks_and_exact_owned_network_can_be_reused(tmp_path):
     document, _ = deployment_document(tmp_path)
     existing = [
         {"Name": "old_backend", "IPAM": {"Config": [{"Subnet": "172.30.0.0/24"}]}},
-        {"Name": "rsc-pilot-test_backend", "IPAM": {"Config": [{"Subnet": "172.18.0.0/16"}]},
+        {"Name": "rsc-pilot-test_backend", "Driver": "bridge", "Scope": "local", "Internal": False,
+         "IPAM": {"Config": [{"Subnet": "172.18.0.0/16"}]},
          "Labels": {"com.docker.compose.project": "rsc-pilot-test", "com.docker.compose.network": "backend"}},
     ]
     assert check_networks(document, existing, "rsc-pilot-test") == []
@@ -358,7 +366,8 @@ def test_disjoint_networks_and_exact_owned_network_can_be_reused(tmp_path):
 ])
 def test_same_network_name_does_not_hide_wrong_owner_or_allocation(tmp_path, change):
     document, _ = deployment_document(tmp_path)
-    network = {"Name": "rsc-pilot-test_backend", "IPAM": {"Config": [{"Subnet": "172.18.0.0/16"}]},
+    network = {"Name": "rsc-pilot-test_backend", "Driver": "bridge", "Scope": "local", "Internal": False,
+               "IPAM": {"Config": [{"Subnet": "172.18.0.0/16"}]},
                "Labels": {"com.docker.compose.project": "rsc-pilot-test", "com.docker.compose.network": "backend"}}
     change(network)
     assert check_networks(document, [network], "rsc-pilot-test") == ["existing_pilot_network_mismatch"]

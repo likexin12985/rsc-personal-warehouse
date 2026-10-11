@@ -1,3 +1,29 @@
+# 当前状态：2026-10-11 12:06（北京时间）
+
+**试点 MVP，不等同完整 V1；`not_ready`，未上线。** 当前工作树继续沿候选 `d8b5ff14a4f9a16590d45df38c34da5a457b5ad7` 验收；packet、stage 和受限镜像构建仍有真实回执，数据库 socket probe 的唯一失败和精确 cleanup 保持原样，未重放。正式 Agent/STS/公开 issuer 已各有隔离或阶段性成功回执，但这不等于正式 API/gate 只读挂载、续期、应用密钥/DB pin/registry、云角色和对象权限全部通过；bucket-audit 仍是本地 profile 接线。OSS 对象级 Put/Get/删除、SMS/UAT、实际恢复、部署和回滚仍未完成。
+
+hosted PostgreSQL 16 run `37951099053` 已全终态 **completed/failure**。当前权威只读回执为 `artifacts/condition-notification-lock-scope-20261010/pg16-final-readback-23.json`（SHA-256 `d88fdc7541205fa0cd6fb96be310d2af03008f309521ce27b38adae2fbf4397c`）：共 76 个 job，72 success、4 failure、0 in progress；失败为 `static_safety (1)/(2)`、`pg16_runtime (inventory)` 及汇总 `postgresql16-release-gate`。`static_safety (0)` 和 `pg16_runtime (migrations)` 已成功。PG16 门禁未通过；旧 run 未取消、未重跑。当前树已完成认证 key-claims **23 passed**、备份 signer/reader/recovery **155 passed** 的直接影响聚焦回归；0182 普通通知锁范围已补齐精准谓词，迁移聚焦 **4 passed**、return-condition runtime overlay **5 passed**，最新证据为 `artifacts/condition-notification-lock-scope-20261010/current-condition-lock-scope-focused-20261011.json` (SHA-256 `c2374e11d9463f6192921e32c53d3370d8bf54a3d14c0a8744d71fb9cc355b48`)；仍必须由新 hosted 当前 SHA 实测。
+
+该 hosted run 只绑定已提交的 HEAD `d8b5ff14a4f9a16590d45df38c34da5a457b5ad7`；当前工作树仍有 48 个 tracked diff 路径和 6 个未跟踪文件，不能把该回读当作当前未提交 diff 的门禁证据。
+
+当前证据汇总为 `artifacts/condition-notification-lock-scope-20261010/receipt.json`，记录 `releaseDecision=not_ready`；本次摘要同步与工作树绑定见同目录 `current-audit-consistency-20261011-final.json`，安全扫描以该收据绑定的实际日志终态为准。`artifacts/metadata-preflight-repair-20261010/current-audit-consistency-03.json` 以及此前 `current-repository-safety-02/03` 回执均属于 2026-10-10 的历史快照，仅证明当时的 readback-22、工作树和扫描范围，不能代表当前未提交 diff 或替代 hosted PG16/发布门禁。
+
+当前 socket 设计回执 `artifacts/selected-preproduction-controller-20261009/socket-runtime-plan-01.md` SHA-256 为 `2c465de08e8320b4eaaf6cd82991bbb17e67dc2085777a3c9a25bc6ad04edbdb`，仍是设计/评审证据，尚未应用数据库运行时变更。最新本地 focused 回归为 **332 passed in 170.72s**，覆盖 OSS worker stderr 守卫、独立 bucket-audit profile、PNVS provider/OIDC、只读投影、HTTPS smoke 目标、Docker 端点拒绝、声明网络存在性/属性和 metadata wiring；回执为 `artifacts/metadata-preflight-repair-20261010/network-security-03/receipt.json`，SHA-256 `90cfd81c5982bbf84223956c880d765a0d376abedf966b18a28bea81f2366230`。五个生产脚本 `py_compile`、`smoke_test.sh` shell 语法和 `git diff --check` 通过。下方 23:18、23:00 及 00:50 内容保留为历史/阶段快照，不能覆盖本段当前状态。
+
+为下一候选新增的纯本地 socket transport 契约草案位于 `artifacts/selected-preproduction-controller-20261009/revision-06-socket/`：29 passed，`py_compile` 通过，覆盖 proc-root、宽泛 `/run/postgresql`、symlink、元数据缺失、RW bind、自动创建 host path、socket 漂移和数据库 runtime generation 漂移拒绝。该草案不属于当前 packet，未连接 Docker/SSH/数据库，不能替代真实 host/Compose readback，也未授权新 probe；回执为 `revision-06-socket/focused-receipt.json`。
+
+下方旧候选（包括 `a429f01`、`2a49cbc`）及旧计数均为历史快照，仅供追溯，不代表当前候选或当前门禁证据。
+
+当前下一步：先完成 0182 当前头的新候选和 hosted PG16 验证，再处理已评审的数据库 socket 运行时变更与新的 probe；认证/备份旧失败点已有当前树聚焦覆盖，不重写旧 hosted 终态。正式令牌目录/常驻身份、OSS 对象权限、SMS/UAT、恢复、回滚和部署仍分别待验。当前保持 `not_ready`，本轮不提交、不推送、不迁移、不部署、不切换域名。
+
+## 2026-10-10 02:19 后态：metadata network 只读回读恢复，发布仍未就绪
+
+前一份 `metadata-network-readback-01.json` 中的 Docker exit 125 已定位为命令兼容性问题：目标机 Docker 29.1.3 的 `docker network inspect` 不接受 `--no-trunc`；该参数属于 `network ls`。发布器已改为使用完整 network ID 直接执行 `docker network inspect`，保持失败关闭，不放宽身份校验。
+
+修复后的目标机只读回读为 `artifacts/openbao-runtime-20261009/metadata-network-readback-02.json`，SHA-256 `d7167c66cd9dd1986f53ef86d979c5b85fcaba480e87daf0a7590477a7905b76`：SSH exit 0、network inspect exit 0，完整 network ID、`rsc-openbao-metadata`、bridge、Internal=true、Compose project/network labels 与 metadata/旧 web 两个成员均精确匹配；`mutationsPerformed=false`、`databaseWrites=false`、`releaseReady=false`。这是目标机只读证据，不等于候选部署、切换或发布通过。
+
+本次修复的本地聚焦回归覆盖 Caddy 内容地址存在且 hash 匹配、缺失、symlink、内容不符、stat/read OSError 共 6 项，并新增 network inspect 参数回归 1 项；两个聚焦测试文件合计 22 passed，四个脚本 `py_compile` 和 `git diff --check` 通过。聚焦回执为 `artifacts/metadata-preflight-repair-20261010/network-inspect-01/receipt.json`，SHA-256 `62907feb43eb1c9404acd83068e3de7a151b6dc0ae07128529d997c50b4d6dca`；Caddy 六项独立回执保留在 `artifacts/metadata-preflight-repair-20261010/caddy-01/`。PG16、数据库 socket、新候选 probe、OSS 对象权限、SMS/UAT、恢复、部署和回滚仍是独立未完成门禁。
+
 ## 2026-10-09 23:18 后态：公开 OIDC 元数据已验，仓库安全门禁已最小修复
 
 **试点 MVP，不等同完整 V1；`not_ready`，未上线。** 本节更新下方23:00快照，原失败、旧候选和隔离证明均保留，不把本地检查或公开元数据通过写成完整上线通过。
@@ -242,7 +268,7 @@ C1 实现为 `c4851de57bfd53237634ba06d3dce4b112460a83`，旧 CI 终态交接为
 
 PNVS 脱敏身份预检及部署配置组 122 passed；候选 Compose 已解析，十项真实配置缺口仍阻止部署。旧 CI 已终态 48 成功/27 失败，新增静态失败正在逐项修复；旧成功项不替代新 SHA。微信登录/端口已解决，公众平台 URL 工具限制仍独立存在。小程序 API 留空并拒绝网络请求，不接入仍关闭短信的旧 API。
 
-详细镜像 ID、来源摘要、失败保留、验证边界和接续材料见 [候选镜像与 PNVS 预检](PILOT_CANDIDATE_BUILD_20261008.md)。原 Goal 回读仍为 blocked，本次按已授权普通开发继续，没有伪造 Goal 恢复或完成。
+详细镜像 ID、来源摘要、失败保留、验证边界和接续材料见 [候选镜像与 PNVS 预检](PILOT_CANDIDATE_BUILD_20261008.md)。**历史快照**：当时 Goal 回读仍为 blocked；本次按已授权普通开发继续，没有伪造 Goal 恢复或完成。
 
 ## 2026-10-08 17:20 接续：0179 修复候选与真实上线条件
 
@@ -267,7 +293,7 @@ PNVS 脱敏身份预检及部署配置组 122 passed；候选 Compose 已解析�
 - 用户已经明确授权提交、推送和部署。审查候选并完成必要本地验证及敏感文件检查后，可以提交并正常推送 `codex/notification-delivery-worker`，以产生同一新 SHA 的远端 CI；不要求尚未产生的远端同 SHA 结果先于提交存在。下文历史“所有外部门禁齐全前不提交、不推送”不再作为当前执行规则。
 - 只读核实 `.github/workflows/postgresql16-release-gate.yml` 已为本分支 push 配置 GitHub 托管 runner 和一次性 `postgres:16-alpine` 服务，另有独立私有 PG16 集群的历史/业务门禁。没有当前候选 CI 证据仍是待验收项；本机没有 PG16/Docker 不构成必须另购 RDS 的理由。只有实际权限、runner 或服务失败才按具体结果登记外部阻塞。
 - 提交测试候选不等于生产放行。部署/上线仍分别核验当前版本 CI、正式迁移/ACL、身份和真实 PNVS 登录、多角色流程 UAT、备份恢复及回滚。真实短信登录属于首发必需；后置的是业务短信/微信/飞书通知渠道及投递运维。
-- 不 force-push，不连续推送取消同版运行，不关闭失败门禁，不将旧 SHA、取消、跳过或本地静态通过当成 hosted PG16 通过。当前 Goal 工具回读仍是 `blocked`；本次续接没有伪造 `active` 或 `complete`，没有重建 Goal。
+- 不 force-push，不连续推送取消同版运行，不关闭失败门禁，不将旧 SHA、取消、跳过或本地静态通过当成 hosted PG16 通过。**历史快照**：当时 Goal 工具回读为 `blocked`；本次续接没有伪造 `active` 或 `complete`，没有重建 Goal。
 
 ### 本地增量证据与候选范围
 
@@ -3058,4 +3084,138 @@ v2 句柄 **99306 已 exit=1**，quantity 目录 `artifacts/local-scrap-http-pg1
 
 当前代码以 [提供方运行入口交接](PROVIDER_RUNTIME_WIRING_20261009.md) 为准，覆盖前文未接线的历史状态。Settings/Compose、认证及联系人 HTTP 工厂、不可变启动快照、完整 binding readiness 与结构 pin gate 已连接；冷导入与联系人真实预检遗漏均已修复。新增/受影响聚焦验证分阶段通过，真实本机 PG16 接线原14项和修复聚焦4项分别通过，源码和停止回执独立留存；未重跑完整终态套件。聚合证据为 `artifacts/provider-runtime-wiring-20261009/milestone-receipt.json`。
 
-**试点 MVP，不等同完整 V1；仍未提交、未上线，`not_ready`。** 真实 Linux 运行身份及只读挂载、Transit/STS/私有 OSS、0181 hosted PG16 完整门禁、真实短信与角色/真机 UAT、恢复保管及部署回滚仍待验收。现有业务范围、角色隐藏与后续迭代清单保持；不因局部通过直接启用生产。
+**试点 MVP，不等同完整 V1；候选已提交但未上线，`not_ready`。** 候选 `d8b5ff14` 已完成 packet、stage 和受限镜像构建；当前工作树的文档、脚本和聚焦测试改动仍未提交。真实 Linux 运行身份及只读挂载、Transit/STS/私有 OSS 完整对象权限、0181 hosted PG16 完整门禁、真实短信与角色/真机 UAT、恢复保管及部署回滚仍待验收。现有业务范围、角色隐藏与后续迭代清单保持；不因局部通过直接启用生产。
+## 2026-10-10 00:50 后态：候选包已传送，镜像构建成功，probe 被数据库 socket 挂载阻断
+
+**试点 MVP，不等同完整 V1；`not_ready`，未上线。** 本节记录客户端重启后沿同一候选继续执行的真实结果；不重放已终态测试，不把局部通过写成部署完成。
+
+候选提交 `d8b5ff14a4f9a16590d45df38c34da5a457b5ad7` 已生成 packet-03。9 个公开文件传送到目标机 `/opt/rsc-candidate-d8b5ff14a4f9-b571559652a3/packet`，传送回执 `public_packet_received`，release SHA `b571559652a3f79e518df9764cd665a18363da15eceb345bfb4838a340f45c73`、manifest SHA `3cd3dd23f38005d2ef44b0f33a2d24151693081ed7488282448be1a7cab9776b`，随后只读 status 逐文件 9/9 哈希匹配。传送未写数据库、未创建容器。
+
+远端 `stage` 通过（1040 个生产源文件）；受限 `build` 通过，镜像为 `sha256:042c927f601b1b84dccbf350f11574f77b1e91bb48cee51d9ca7414fc036fbe9`，生产输入 SHA `99d953d067c361995140fcd541d19606f2fa5a6183a10248eeae7e246af04609`。只读状态回读确认目标 PostgreSQL 16 容器 `50c7158e…`、`rsc_preproduction` 的应用对象盘点为空（未据此断言系统目录为空），UUID role/schema/extension 均不存在。
+
+首次 `probe --apply` 没有启动 worker，也没有访问数据库：Docker 创建的唯一容器 `7fea2968…` 保持 `created`、`ExitCode=128`、`OOMKilled=false`，OCI 错误为无法将 `/proc/3509128/root/run/postgresql` bind 到 probe 的 `/run/rsc-preprod-postgres`（`invalid argument`）。临时 bind-mount 能力探针同样以 exit 32 失败；宿主机 `/run/postgresql` 不存在，socket 只存在于数据库容器。已按精确容器 ID 执行一次 cleanup，资源删除成功，source/journal 保留。该问题是候选运行环境的 socket 暴露/挂载适配阻塞，不能通过重跑 probe 绕过；需要后续最小、可审查的数据库 socket 暴露方案和新的候选证据。
+
+后续只读盘点确认目标数据库 Compose 位于 `/opt/rsc-preproduction-db/compose.json`；`db` 服务当前只有 `database:/var/lib/postgresql/data` 和只读初始化脚本 bind，没有宿主机 socket bind，`/run/rsc-preproduction-postgres` 与 `/run/postgresql` 均不存在。回执为 `artifacts/selected-preproduction-controller-20261009/remote-db-compose-readback-01.json`（SHA256 `d46672bb2ebad9ece310f74c46e4bb518c9bf5118c4e3dbe3c0f47387d856f73`）。该回执只读、未读环境变量值、未重启或修改数据库；任何 socket 暴露都必须作为独立数据库运行时变更先评审、备份并回读。
+
+独立 socket 运行时审查已形成设计回执 `artifacts/selected-preproduction-controller-20261009/socket-runtime-plan-01.md`（SHA256 `2c465de08e8320b4eaaf6cd82991bbb17e67dc2085777a3c9a25bc6ad04edbdb`）。审查确认 Compose 追加挂载不能原地保留当前 container ID/StartedAt；若采用专用宿主目录或仅承载 socket 的 named volume，必须先做独立数据库运行时变更、备份和新的 runtime generation 回读。当前仍未应用该方案。
+
+正式 STS 身份验证已完成：PNVS 和 OSS 各自一次真实 `AssumeRoleWithOIDC`/`GetCallerIdentity` 全部 7 项通过，两用途的 runtime UID/GID 与只读投影已核对；OSS 回执另有 host cap/NoNewPrivs/seccomp 边界，PNVS 的同类边界沿正式 Agent poststart/只读回执核对，临时资源已清理。未发送短信，未验证 OSS 对象权限。正式 provider、`rsc-pilot-files`、`rsc-pilot-pnvs` 角色及各自最小策略已在 RAM 精确回读；bucket-audit 仍仅有本地 profile 接线和设计方案，未创建云角色、未执行对象写入。
+
+（历史快照）metadata-public 本地接线的最终聚焦证据为 metadata 5 项及直接受影响网络节点合计 8 项通过；当时精确云端 metadata network inspect 因错误的 `--no-trunc` 参数返回 Docker exit 125，故当时 runtime/release 仍阻断。该命令兼容性已在 2026-10-10 后态修复，当前以 `metadata-network-readback-02.json` 为准。
+
+新候选 hosted PG16 run `37951099053` 的早期只读回执为 `pg16-jobs-readback-14.json`（2026-10-09T17:27:03Z）：75 个 job 中 70 success、4 in progress、1 terminal failure；该快照之后 `pg16_runtime (migrations)` 已成功，最新状态见本文顶部 `readback-21`。当时 run aggregate 未终态，PG16 门禁不能通过；未取消、未重跑。Client run `37951098768` 已成功，但 Client 绿灯不替代 PG16、probe、SMS/UAT、对象权限、备份恢复和回滚门禁。
+
+本次客户端重启后的本地验证只覆盖新改动：metadata release wiring 与 bucket-audit profile 两个聚焦测试文件合计 `15 passed`，三项 metadata/bucket 脚本可编译，`git diff --check` 通过；未重跑旧终态套件，未执行新的远端写入。
+
+## 持续 goal：下一个 10:00（Asia/Shanghai）前的试点 MVP 放行计划
+
+此 goal 沿用当前线程已有目标，不创建第二个重复目标。截止时只有在所有必要证据齐全的情况下才允许上线；否则必须保持 `not_ready`，不提交伪通过、不切换域名、不启动生产流量。
+
+执行顺序固定为：
+
+1. hosted PostgreSQL 16 run `37951099053` 已通过只读接口确认终态失败（76 jobs：72 success、4 terminal failure、0 in progress）；当前终态回读为 `artifacts/condition-notification-lock-scope-20261010/pg16-final-readback-23.json`，不能把 Client 成功或局部本地回归替代 PG16 通过。
+2. 不重放已失败的 probe。先为数据库容器准备经过评审的专用宿主机 PostgreSQL socket 暴露方案，保持候选容器 `network=none`、`CapDrop=ALL`、NoNewPrivs、seccomp、只读根文件系统、UID/GID 和最小挂载；方案必须先有备份/只读核对、新候选包、聚焦测试、stage/build 证据，再执行新的 probe。
+3. 只有新的 probe 成功后，才按 `roles → defaults → uuid → migrate` 顺序写入，并对数据库身份、应用对象、迁移 head、ACL、函数权限、provider-aware 密文历史引用和 C3 DEK/registry 做权威回读。
+4. 完成正式令牌目录读取守卫、常驻运行配置、OpenBao/OIDC/RAM/STS 续期边界；不输出任何 token、密码、私钥或验证码。
+5. 创建并回读独立 bucket-audit RAM identity，完成私有 OSS 最小对象权限和失败/unknown/no-replay 验证；STS 身份成功不能替代对象权限通过。
+6. 完成真实 SMS-only 登录、人员唯一映射、技术员/区域/总部角色 UAT 和真机主链 UAT；微信/飞书真实业务通知及投递运维仍留在后续迭代。
+7. 完成备份、冷关闭/重新解锁、恢复、附件/密钥恢复和发布回滚验收。
+8. 更新正式验收审计与交接文档，检查当前 diff、聚焦测试、源码哈希和所有证据路径；只有所有门禁同时通过，才允许 commit、prepare/start、域名切换、smoke 和发布后读回。
+
+历史阶段硬性停线条件（当前未完成项仍适用）：hosted PG16 未终态或失败、数据库 socket 方案未经新候选审查、任何写入结果 unknown、OSS 对象权限缺证据、SMS/UAT 缺证据、恢复/回滚缺证据，均继续保持 `not_ready`。metadata network 命令 exit 125 已由正确参数的只读回读消除；当前已知的 probe 失败回执、精确 cleanup 回执和目标数据库无写入回读必须保留，不能用新 runId 覆盖。
+
+## 2026-10-10：PG16 inventory notification 锁竞争的最小 successor 修复
+
+**试点 MVP，不等同完整 V1；仍为 `not_ready`，未提交、未推送、未部署。** 旧 hosted run `37951099053` 已是失败终态（76 jobs：72 success、4 failure、0 in progress），失败包含 `pg16_runtime (inventory)`；权威回执为 `artifacts/client-safety-public-source-fix-20261009/pg16-final-readback-22.json`。本轮没有重跑旧 run，也没有把本地结果写成 hosted PG16 通过。
+
+已定位根因：`notification_events` 的 deferred `rsc_condition_decision_seal_lock()` 对普通通知也锁定 `inventory_ledger_heads`，造成无关事务在 PostgreSQL 16 statement timeout 中等待。新增 successor migration `20261231_0182_condition_notification_lock_scope.py`，保持 0167 frozen catalog 不变，只在锁前识别普通库存通知并提前返回；条件决策保留 reserved namespace/request evidence 的全局锁，`rsc_condition_decision_seal_relevant()` 的广泛 fence 未收窄。运行时仅新增只读 digest overlay `condition_notification_lock_scope_security.py`。
+
+受影响本地验证：迁移/SQL/SQLite **4 passed**，return-condition runtime **9 passed**，完整 `test_database_security.py` **305 passed**，通知回归 **55 passed**（合并受影响回归 **314 passed**）；`py_compile` 和 `git diff --check` 通过。非密收据：`artifacts/condition-notification-lock-scope-20261010/receipt.json`（SHA256 `80eb508a923983adf89eea49fe9b311f509e20492cff2ea38686e5fa86938551`）。这些结果只证明当前工作树的静态/本地行为，不替代 hosted PG16、真实数据库 socket、迁移/ACL、OSS 对象权限、短信/UAT、恢复、回滚或部署证据。
+
+产品范围继续冻结：申请/提交→审批→最小货源分配/占用→后台人工履约与发运记录→本人收货→个人仓入账；技术员只保留申请、状态、本人收货/入账，后置供给区块按 capability/角色隐藏。拒收/退回补偿、stock-return 全链、工单物料消耗/替换/冲销/旧坏件回收、报损报废/成色纠正、盘点/期初导入/冻结/复盘、人员调拨/离职交接、复杂报表/Excel/打印、真实短信/微信/飞书渠道及投递运维继续列为后续迭代。首页仍为公开“交流备件知识大全”，不展示登录；星星后台按钮指向 `https://rscwz.cn/xx`。
+
+## 当前持续 Goal（2026-10-10 刷新）
+
+持续把 RSC 个人仓推进到**试点 MVP 可上线**，明确“不等同完整 V1”。当前工作树 `<current-worktree>`、分支 `codex/notification-delivery-worker` 的所有未提交改动必须保留；不 reset、不 revert、不丢弃、不覆盖其他任务证据。
+
+当前代码头已加入 `20261231_0182` successor：它修复普通库存通知与 condition-decision seal 共享 `inventory_ledger_heads` 锁的 PostgreSQL 16 竞争，同时保留 0167 广泛 fence、不可变流水、幂等、审计、权限、安全约束和取消/关闭守卫。当前本地受影响回归为 0182 迁移 4、return-condition 9、数据库安全 305、通知 55，合并受影响回归 314 项通过；这些仅是本地证据。hosted PG16 run `37951099053` 已失败终态（72 success、4 failure、0 in progress），不能写成通过，也不重跑旧 run。
+
+接续顺序固定为：先完成 0182 当前头的来源/迁移/权限静态审计和新的候选证据；再评审并实施数据库 socket 暴露方案，成功后才按 roles → defaults → uuid → migrate 写入并权威回读；随后完成正式令牌目录守卫、常驻运行身份、私有 OSS 对象权限、SMS-only 登录、人员唯一映射、技术员/区域/总部 PC/H5/小程序及真机 UAT、备份恢复与回滚；最后才允许 commit、push、prepare/start、域名切换和发布后读回。任何 unknown、hosted PG16 失败、运行身份/OSS/SMS/UAT/恢复/回滚证据缺失，都保持 `not_ready`。
+
+产品范围冻结为：公开首页“交流备件知识大全”且不展示登录，星星后台按钮跳转 `https://rscwz.cn/xx`；首发闭环为申请/提交→审批→最小货源分配/占用→后台人工履约与发运记录→本人收货→个人仓入账，技术员只保留申请、状态查看、本人收货和本人入账，后置供给区块按 capability/角色隐藏。拒收/退回补偿、stock-return 全链、工单物料消耗/替换/冲销/旧坏件回收、报损报废/成色纠正、盘点/期初导入/冻结/复盘、人员调拨/离职交接、复杂报表/Excel/打印、真实短信/微信/飞书业务渠道与投递运维均列为后续迭代；不为本次上线扩展。
+
+## 2026-10-11 续审：0182 空值锁范围修复与完整迁移图复核
+
+本轮继续保持**试点 MVP，不等同完整 V1**，发布判定仍为 `releaseDecision=not_ready`。在 0182 successor 的普通通知提前返回条件中，发现 JSON 元数据字段为空时 PostgreSQL 三值逻辑可能让 `NOT (...)` 结果变成 `NULL`，从而误落回 `inventory_ledger_heads` 的共享锁。已将迁移、候选 SQL 和运行时 digest overlay 的五个条件统一改为显式 `COALESCE(..., false)`，并新增回归断言，确保普通通知的空 `request_id`/业务字段不会穿透到 `FOR UPDATE`；条件决策的 reserved namespace/request evidence 仍保留全局锁，0167 frozen catalog 未修改。
+
+新增/受影响本地证据：完整 `backend/tests/test_alembic_migrations.py` **168 passed**；0182 迁移源/hash/SQL/SQLite 与空值守卫 **4 passed**；return-condition **9 passed**；完整 database security **305 passed**；notification regression **55 passed**；合并受影响回归 **314 passed**。非密收据已刷新为 `artifacts/condition-notification-lock-scope-20261010/receipt.json`，SHA256 `f29329f2372cc9ff2610f0b613e6980c2720287c80b4669bae8719e39e99c2d7`，记录当前头 `20261231_0182`、冻结 0167 未变和空值守卫为二值逻辑。`git diff --check` 继续通过；本轮未重跑无关终态套件。
+
+该证据仍只覆盖当前工作树的离线/本地数据库安全与迁移图行为，不能替代 hosted PostgreSQL 16、真实数据库 socket/ACL/迁移写入、私有 OSS 对象权限、真实短信/角色与真机 UAT、恢复、回滚或部署。旧 hosted run `37951099053` 的 **72 success / 4 failure / 0 in progress** 失败终态继续保留，不重跑、不改写为通过；试点 MVP 范围、角色隐藏和后续迭代清单保持不变。
+
+## 2026-10-11 接续：PostgreSQL socket revision-06 只读契约复核
+
+hosted PG16 run `37951099053` 已通过 GitHub 只读接口重新核对为 terminal failure，所有 job 均已结束；终态为 72 success、4 failure、0 in progress。失败仍为 `static_safety (1)`、`static_safety (2)`、`pg16_runtime (inventory)` 和汇总 `postgresql16-release-gate`，没有重跑该 run，也没有将用户目标文本中残留的 in-progress 快照写成当前状态。
+
+针对目标机 Compose 的 socket 阻塞，revision-06 只读契约复核通过：`test_socket_contract.py` **29 passed**，候选隔离/UUID/公开交付契约组合 **83 passed**。覆盖精确宿主目录 `/run/rsc-preproduction-postgres`、禁止 `/proc/<pid>/root` 与宽 `/run/postgresql`、只读 bind、`create_host_path=false`、目录/socket 元数据与 inode 稳定性、Compose mount 变化必须产生新的数据库 runtime generation，以及 `network=none`、CapDrop=ALL、NoNewPrivs、只读根文件系统、UID/GID 23204:23204、无额外组/能力/PidMode/volumes-from/TCP 端口等隔离边界。
+
+复核收据为 `cloud_oam/artifacts/selected-preproduction-controller-20261009/revision-06-socket/focused-receipt-20261011.json`，SHA256 `3477d1305d56ed9796113093a04938ec048a93a20980e1b6478d7a1a56b57222`。现有 Compose readback 仍显示无宿主 socket bind，旧 probe 的 `invalid argument` 和精确 cleanup 证据继续保留；没有执行 Compose 重建、宿主机目录创建、数据库写入或新 probe。新候选包、stage/build 和数据库 runtime generation readback 仍是下一道外部门禁，试点保持 `not_ready`。
+
+本轮同一当前树的 pilot/preflight/发布绑定聚焦组重新通过 **223 passed**，覆盖 `test_pilot_preflight.py`、`test_pilot_deploy.py`、`test_pilot_release_binding.py`、`test_pilot_oss_oidc_preflight.py`、`test_oss_bucket_audit_profile.py` 和 `test_pilot_metadata_release_wiring.py`。非密收据为 `cloud_oam/artifacts/condition-notification-lock-scope-20261010/current-focused-release-preflight-20261011.json`，SHA256 `a9053c6d6c9a682cea8e3112f1c93e1a1c3d3d1b810ac446d1b90b0d55c294c6`；它只证明本地配置/异常边界和发布绑定自洽，不证明云端对象权限、hosted PG16、短信/UAT、恢复、回滚或部署。
+
+
+## 2026-10-11 05:40：PostgreSQL 16 门禁本地守卫回读
+
+当前工作树继续保持 **试点 MVP，不等同完整 V1；`releaseDecision=not_ready`**。为确认门禁不会在没有受控 hosted 数据库时误报通过，直接运行了 `backend/tests/test_postgresql16_release_gate.py`，结果为 **1 failed in 1.06s**，失败原因为 `runtime gate requires an acknowledged disposable hosted database`。这是预期的 fail-closed 守卫，不是 PostgreSQL 16 运行场景通过；本次没有选择数据库、没有执行迁移/ACL/并发/kill/回滚场景、没有写数据库。
+
+原始输出和非密收据：`artifacts/condition-notification-lock-scope-20261010/local-postgresql16-gate-guard-20261011.log`（SHA256 `71469b1bb31e9bd9d33cfbf3e3c22fab6ce535aa4bd21a384379132066b3d2f0`）及 `local-postgresql16-gate-guard-20261011.json`。主收据已登记该边界。
+
+因此，旧 hosted run `37951099053` 的失败终态仍是唯一可用的 hosted PG16 事实；0182 本地验证、223 项试点预检、socket revision-06 契约验证和本地门禁守卫均不替代新的 hosted PG16 候选、数据库 socket 运行时变更和权威回读。未提交、未推送、未部署、未重放已终态测试。
+
+
+当前树安全扫描为 **PASS**，最新摘要同步后的日志为 `artifacts/condition-notification-lock-scope-20261010/current-tree-safety-20261011-summary-sync.log`（SHA256 `44dc0c370d1dac496318a2c2908000504ab14b920fc444f8381f1b98a7f5704d`）；主收据以文件当前内容为准。
+
+
+## 2026-10-11 05:53：认证/备份静态失败修复的当前树聚焦回归
+
+针对旧 hosted PG16 失败摘要中提到的认证幂等检查顺序、备份对象 reader 和归档 signer 夹具，当前工作树只运行直接受影响的三个聚焦文件：`test_authentication_idempotency.py`、`test_backup_archive_oidc.py`、`test_backup_objects.py`，结果 **144 passed in 10.31s，exit 0**。非密收据为 `artifacts/condition-notification-lock-scope-20261010/current-auth-backup-focused-20261011.json`（SHA256 `a5cc2f5f338b253eb1c8ac2181a55a0a3dbd8d8973259ef31332e409248867c0`）。
+
+这只证明当前树的本地聚焦回归，不等于 hosted PG16 静态分片已重新执行，也不证明真实 OSS 对象权限、短信/UAT、恢复、回滚或部署。未访问外部凭证，未写数据库，未提交、推送或部署。
+
+
+## 2026-10-11 05:57：hosted PG16 终态只读回读更新
+
+通过 GitHub 只读 `github_fetch_workflow_run_jobs` 重新核对 run `37951099053`，确认所有 76 个 job 已终态：72 success、4 terminal failure、0 in progress。失败项为 `static_safety (1)`、`static_safety (2)`、`pg16_runtime (inventory)` 和 `postgresql16-release-gate`；`static_safety (0)` 与 `pg16_runtime (migrations)` 已成功。旧的 in-progress 快照只作为历史保留，当前不能再引用为状态未知。
+
+当前终态回读为 `artifacts/condition-notification-lock-scope-20261010/pg16-final-readback-23.json`，SHA256 `d88fdc7541205fa0cd6fb96be310d2af03008f309521ce27b38adae2fbf4397c`。本次仅只读查询，没有取消、重跑、源代码修改、数据库写入或部署；`releaseDecision=not_ready` 保持。
+
+
+## 2026-10-11 06:02：备份 signer/reader/recovery 聚焦回归
+
+为覆盖旧 hosted `static_safety (2)` 的 signer 夹具失败及备份 reader 边界，当前树新增聚焦运行 `test_backup_archive_signing.py`、`test_backup_reader_oidc.py`、`test_backup_entry.py`、`test_backup_recovery_boundaries.py`，结果 **155 passed in 16.96s，exit 0**。非密收据为 `artifacts/condition-notification-lock-scope-20261010/current-backup-boundary-focused-20261011.json`（SHA256 `d32dcb234fd3507884574d19d722385a8a2e897edc3949b9fc5b4d155eb86e37`）。
+
+该结果证明当前树的本地 signer、独立 reader、入口和恢复边界聚焦回归通过，但不改写 hosted run 的失败终态，也不等于真实 OSS 对象权限、真实冷恢复、SMS/UAT、回滚或部署完成。未访问云端凭证，未写数据库、对象存储或生产环境。
+
+
+## 2026-10-11 06:08：原 Edge 只读 transport 健康核对
+
+原 Edge 兼容脚本返回 `compatibility=validated`，确认业务入口仍是原 Mac Edge、CDP `127.0.0.1:9224` 和既有 Windows SOCKS；随后仅调用一次 CUA `getState`，调用超时并触发 kernel reset。该次没有读取业务标签页、没有执行浏览器写入或安全验证，也没有执行远端 socket、RAM、数据库或部署操作。非密回执为 `artifacts/condition-notification-lock-scope-20261010/original-edge-readonly-health-20261011.json`（SHA256 `cbe09fe070019de81a95a62bf1840c3851909821837e7131038364b4bd4e905a`）。
+
+因此原 Edge 的归属检查通过，但托管浏览器 transport 仍不可用；继续保持禁止切换 Chrome/其他 profile、禁止直连 HTTP 和禁止远端写入的边界。
+
+
+## 2026-10-11 06:15：认证 key-claims hosted 失败点聚焦回归
+
+根据 hosted `static_safety (1)` 原始日志，当前树补跑直接受影响的 `test_authentication_key_claims.py`，结果 **23 passed in 5.15s，exit 0**。该文件覆盖旧失败中的 OpenBao 历史回放、过期回放、provider 路由失败和幂等时间 CHECK；此前备份 reader/signer 聚焦回归已分别通过。非密收据为 `artifacts/condition-notification-lock-scope-20261010/current-authentication-key-claims-focused-20261011.json`（SHA256 `88c01693307394cf840946c4792004aa80c120578454783d540eb7bbb2d9a6e9`）。
+
+这仍是当前树本地聚焦证据，不能把旧 hosted job 改写为通过，也不替代新的 hosted PG16 run；未读取 OpenBao/云端凭证，未写数据库或部署。
+
+
+## 2026-10-11 hosted 失败点与当前树聚焦覆盖映射
+
+本轮通过 GitHub 只读 job log 复核了 run `37951099053` 的失败细节：
+
+- `static_safety (1)`（job `113889769722`）的 10 项失败由 9 项 `test_authentication_key_claims.py` 幂等时间 CHECK 失败和 1 项 `test_backup_objects.py::test_environment_factory_uses_same_verified_signer_and_tls` 的 `object_reader_unavailable` 构成。当前树对应的认证 key-claims **23 passed**、备份对象/reader 聚焦 **144 passed**，结果已分别登记在当前树收据中。
+- `static_safety (2)`（job `113889770229`）的唯一失败是 `test_backup_archive_oidc.py::test_real_sdk_configuration_disables_retries_redirects_and_keeps_verification` 的 signer keyword fixture。当前树对应的 archive OIDC/signer/recovery 聚焦 **155 passed**。
+- `pg16_runtime (inventory)`（job `113889770305`）仍为 PostgreSQL statement timeout，日志显示普通 `notification_events` 写入等待 `inventory_ledger_heads`；0182 successor 已在当前树做了 NULL-safe lock scope 修复，但必须由新的 hosted PG16 当前 SHA run 实测，旧 run 不能重放或改写。
+
+上述映射只说明本地修复与旧失败点的覆盖关系，不能把旧 run 变成成功；aggregate `postgresql16-release-gate` 仍失败，发布保持 `not_ready`。

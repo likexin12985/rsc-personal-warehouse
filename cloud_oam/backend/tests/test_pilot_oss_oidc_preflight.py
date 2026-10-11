@@ -25,12 +25,13 @@ def test_pilot_rejects_wrong_or_mixed_oss_identity(tmp_path, key, value):
     assert {r["name"]: r["ok"] for r in checks_for(document, path)}["private_oss_oidc_identity"] is False
 
 
-@pytest.mark.parametrize("change", ["writable", "file", "outside_run", "ambiguous", "covering", "missing"])
+@pytest.mark.parametrize("change", ["writable", "host_path_create", "file", "outside_run", "ambiguous", "covering", "missing"])
 def test_pilot_requires_one_exact_readonly_directory_projection(tmp_path, change):
     document, _ = _document(tmp_path)
     api = document["services"]["api"]
     mount = api["volumes"][1]
     if change == "writable": mount["read_only"] = False
+    elif change == "host_path_create": mount["bind"] = {"create_host_path": True}
     elif change == "file": mount["target"] += "/oidc.jwt"
     elif change == "outside_run": mount["source"] = "/tmp/files"
     elif change == "ambiguous": api["volumes"].append(deepcopy(mount))

@@ -29,6 +29,31 @@ CHECKS = ("coordinates_valid", "sdk_version", "bucket_owner", "private_acl",
 STATES = frozenset(("passed", "failed", "unknown"))
 WORKER_SECONDS = 45
 
+# The application object identity and the bucket-audit identity are separate
+# trust subjects.  The files profile keeps the existing environment contract;
+# bucket-audit has a deliberately different prefix so it cannot accidentally
+# reuse the files projection.
+IDENTITY_PROFILES = {
+    "files": {
+        "env_prefix": "OAM_FILE_STORAGE",
+        "region_env": "OAM_FILE_STORAGE_REGION",
+        "bucket_env": "OAM_FILE_STORAGE_BUCKET",
+        "owner_env": "RSC_OSS_PREFLIGHT_OWNER_ID",
+        "role_name": None,  # existing deployments may use a reviewed role name
+        "token_path": None,
+        "session_name": "rsc-pilot-files",
+    },
+    "bucket-audit": {
+        "env_prefix": "RSC_BUCKET_AUDIT",
+        "region_env": "RSC_BUCKET_AUDIT_REGION",
+        "bucket_env": "RSC_BUCKET_AUDIT_BUCKET",
+        "owner_env": "RSC_BUCKET_AUDIT_OWNER_ID",
+        "role_name": "rsc-pilot-bucket-audit",
+        "token_path": "/run/rsc-bucket-audit-identity/oidc.jwt",
+        "session_name": "rsc-pilot-bucket-audit",
+    },
+}
+
 
 class BucketReadTransport:
     """Public SDK HttpClient wrapper: exact GETs and nonempty version XML only."""
@@ -93,7 +118,33 @@ def quiet_sdk():
         logging.disable(previous)
 
 
-def oidc_credentials(region, expected_owner):
+def _identity_environment(profile):
+    """Return an explicit profile mapping; never merge profiles."""
+    value = IDENTITY_PROFILES.get(profile)
+    if value is None:
+        raise ValueError("OSS audit identity unavailable")
+    prefix = value["env_prefix"]
+    return value, {
+        "mode": f"{prefix}_CREDENTIAL_MODE",
+        "role": f"{prefix}_OIDC_ROLE_ARN",
+        "provider": f"{prefix}_OIDC_PROVIDER_ARN",
+        "token": f"{prefix}_OIDC_TOKEN_FILE",
+        "session": f"{prefix}_OIDC_SESSION_NAME",
+        "access_key": f"{prefix}_ACCESS_KEY_ID",
+        "secret": f"{prefix}_ACCESS_KEY_SECRET",
+        "session_token": f"{prefix}_SESSION_TOKEN",
+    }
+
+
+def _target_environment(profile):
+    """Return target-coordinate env names owned by exactly one profile."""
+    value = IDENTITY_PROFILES.get(profile)
+    if value is None:
+        raise ValueError("OSS audit identity unavailable")
+    return {key: value[f"{key}_env"] for key in ("region", "bucket", "owner")}
+
+
+def oidc_credentials(region, expected_owner, *, identity_profile="files"):
     """Explicit audit identity; never consult an environment AK/default chain.
 
     Supply the four Bucket-GET permissions through an independently reviewed
@@ -101,29 +152,34 @@ def oidc_credentials(region, expected_owner):
     Only this explicit inspection path imports the SDK adapter; --help remains
     independent of credentials, token files and application startup.
     """
-    if (os.environ.get("OAM_FILE_STORAGE_CREDENTIAL_MODE") != "oidc_role_arn"
-            or any(os.environ.get(key) for key in (
-                "OAM_FILE_STORAGE_ACCESS_KEY_ID", "OAM_FILE_STORAGE_ACCESS_KEY_SECRET",
-                "OAM_FILE_STORAGE_SESSION_TOKEN"))):
+    profile, names = _identity_environment(identity_profile)
+    if (os.environ.get(names["mode"]) != "oidc_role_arn"
+            or any(os.environ.get(names[key]) for key in ("access_key", "secret", "session_token"))):
         raise ValueError("OSS audit identity unavailable")
     backend = str(Path(__file__).resolve().parents[1] / "backend")
     if backend not in sys.path:
         sys.path.insert(0, backend)
     from app.oss_runtime_credentials import OssOidcCredentialsProvider, OssOidcIdentity
     identity = OssOidcIdentity(
-        role_arn=os.environ.get("OAM_FILE_STORAGE_OIDC_ROLE_ARN", ""),
-        provider_arn=os.environ.get("OAM_FILE_STORAGE_OIDC_PROVIDER_ARN", ""),
-        token_file=os.environ.get("OAM_FILE_STORAGE_OIDC_TOKEN_FILE", ""),
+        role_arn=os.environ.get(names["role"], ""),
+        provider_arn=os.environ.get(names["provider"], ""),
+        token_file=os.environ.get(names["token"], ""),
         region=region,
-        session_name=os.environ.get("OAM_FILE_STORAGE_OIDC_SESSION_NAME", "rsc-pilot-files"),
+        session_name=os.environ.get(names["session"], profile["session_name"]),
     )
-    if identity.role_arn.split(":")[3] != expected_owner:
+    role_parts = identity.role_arn.split(":")
+    if (len(role_parts) != 5 or role_parts[3] != expected_owner
+            or profile["role_name"] is not None
+            and identity.role_arn.rsplit("/", 1)[-1] != profile["role_name"]
+            or profile["token_path"] is not None and identity.token_file != profile["token_path"]
+            or not identity.session_name
+            or profile["role_name"] is not None and identity.session_name != profile["session_name"]):
         raise ValueError("OSS audit identity unavailable")
     return OssOidcCredentialsProvider(identity)
 
 
 def inspect_bucket(region, bucket, expected_owner, *, sdk=None, client_factory=None,
-                   version_reader=version):
+                   version_reader=version, identity_profile="files"):
     """Worker entry; factories support offline tests with the real pinned SDK."""
     checks = dict.fromkeys(CHECKS, "unknown")
     checks["coordinates_valid"] = "passed" if valid_coordinates(region, bucket, expected_owner) else "failed"
@@ -145,7 +201,7 @@ def inspect_bucket(region, bucket, expected_owner, *, sdk=None, client_factory=N
             if client_factory is None:
                 # Reuse the production explicit, refreshable OIDC provider.
                 # Its constructor rejects static SDK/OSS keys as well.
-                credentials = oidc_credentials(region, expected_owner)
+                credentials = oidc_credentials(region, expected_owner, identity_profile=identity_profile)
                 checks["oidc_identity_configuration"] = "passed"
                 config = sdk.Config(region=region, signature_version="v4",
                     credentials_provider=credentials,
@@ -206,7 +262,8 @@ def inspect_bucket(region, bucket, expected_owner, *, sdk=None, client_factory=N
     return checks
 
 
-def inspect_runtime(region, bucket, expected_owner, *, runner=subprocess.run):
+def inspect_runtime(region, bucket, expected_owner, *, runner=subprocess.run,
+                    identity_profile="files"):
     checks = dict.fromkeys(CHECKS, "unknown")
     configured = valid_coordinates(region, bucket, expected_owner)
     checks["coordinates_valid"] = "passed" if configured else "failed"
@@ -216,12 +273,15 @@ def inspect_runtime(region, bucket, expected_owner, *, runner=subprocess.run):
         fingerprint = hashlib.sha256((region + "\0" + bucket + "\0" + expected_owner).encode()).hexdigest()
         try:
             completed = runner([sys.executable, str(Path(__file__).resolve()), "--inspect", "--worker",
-                "--region", region, "--bucket", bucket, "--expected-owner", expected_owner],
+                "--identity-profile", identity_profile, "--region", region, "--bucket", bucket,
+                "--expected-owner", expected_owner],
                 capture_output=True, text=True, timeout=WORKER_SECONDS, check=False)
             # Reconstruct the final response from allowlisted fixed states;
             # never forward even a valid JSON SDK diagnostic or arbitrary field.
+            stderr = getattr(completed, "stderr", "")
             value = json.loads(completed.stdout) if completed.returncode == 0 else None
-            if (type(value) is dict and set(value) == set(CHECKS)
+            if (isinstance(stderr, str) and not stderr.strip()
+                    and type(value) is dict and set(value) == set(CHECKS)
                     and all(type(value[key]) is str and value[key] in STATES for key in CHECKS)
                     and value["coordinates_valid"] == "passed"):
                 checks = {key: value[key] for key in CHECKS}
@@ -232,7 +292,8 @@ def inspect_runtime(region, bucket, expected_owner, *, runner=subprocess.run):
             probe_status = "timeout_unknown"
         except Exception:
             probe_status = "worker_unavailable"
-    return dict(schema="cloud_oam.oss_bucket_preflight.v1", targetFingerprint=fingerprint,
+    return dict(schema="cloud_oam.oss_bucket_preflight.v1", identityProfile=identity_profile,
+        targetFingerprint=fingerprint,
         sdkExpectedVersion=SDK_VERSION, probeStatus=probe_status, checks=checks,
         bucketConfigurationVerified=all(value == "passed" for value in checks.values()),
         credentialRefreshVerified=False, objectRoundTripVerified=False,
@@ -253,19 +314,22 @@ def main(argv=None):
     parser.add_argument("--region", help="OSS region, or OAM_FILE_STORAGE_REGION")
     parser.add_argument("--bucket", help="Exact bucket, or OAM_FILE_STORAGE_BUCKET")
     parser.add_argument("--expected-owner", help="Expected account ID, or RSC_OSS_PREFLIGHT_OWNER_ID")
+    parser.add_argument("--identity-profile", choices=tuple(IDENTITY_PROFILES), default="files",
+                        help="OIDC identity profile (files or independent bucket-audit)")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if not args.inspect:
         parser.print_help()
         return 0
-    region = args.region if args.region is not None else os.environ.get("OAM_FILE_STORAGE_REGION", "")
-    bucket = args.bucket if args.bucket is not None else os.environ.get("OAM_FILE_STORAGE_BUCKET", "")
-    owner = args.expected_owner if args.expected_owner is not None else os.environ.get("RSC_OSS_PREFLIGHT_OWNER_ID", "")
+    targets = _target_environment(args.identity_profile)
+    region = args.region if args.region is not None else os.environ.get(targets["region"], "")
+    bucket = args.bucket if args.bucket is not None else os.environ.get(targets["bucket"], "")
+    owner = args.expected_owner if args.expected_owner is not None else os.environ.get(targets["owner"], "")
     if args.worker:
         # This mode still requires --inspect and emits only the fixed check map.
-        print(json.dumps(inspect_bucket(region, bucket, owner), sort_keys=True))
+        print(json.dumps(inspect_bucket(region, bucket, owner, identity_profile=args.identity_profile), sort_keys=True))
         return 0
-    result = inspect_runtime(region, bucket, owner)
+    result = inspect_runtime(region, bucket, owner, identity_profile=args.identity_profile)
     print(json.dumps(result, sort_keys=True))
     return 0 if result["bucketConfigurationVerified"] else 1
 

@@ -22,6 +22,9 @@ def test_candidate_release_environment_pins_trial_mvp_scope(tmp_path, monkeypatc
     monkeypatch.setenv("PILOT_ENV_FILE", str(deploy.root / ".env"))
     monkeypatch.setenv("PILOT_COMPOSE_FILE", str(deploy.root / "docker-compose.yml"))
     monkeypatch.setenv("PILOT_STATE_DIR", str(tmp_path / "private-state"))
+    monkeypatch.setenv("SMOKE_BASE_URL", "https://rscwz.cn")
+    monkeypatch.setenv("SMOKE_RESOLVE_HOST", "rscwz.cn")
+    monkeypatch.setenv("SMOKE_RESOLVE_IP", "192.0.2.10")
     release = Release(deploy.root, "prepare")
     assert release.environment["OAM_RELEASE_SCOPE"] == "trial-mvp"
     assert release.environment["SMOKE_EXPECTED_RELEASE_SCOPE"] == "trial-mvp"
@@ -216,12 +219,20 @@ def test_docker_copy_inputs_are_never_hidden_by_runtime_ignore(tmp_path,relative
 
 def test_resolve_target_is_bound_to_prepare_receipt(tmp_path):
     deploy=Deployment(tmp_path);deploy.prepare()
-    result,calls=deploy.run('start',SMOKE_RESOLVE_HOST='rscwz.cn',SMOKE_RESOLVE_IP='192.0.2.10')
+    result,calls=deploy.run('start',SMOKE_RESOLVE_HOST='rscwz.cn',SMOKE_RESOLVE_IP='192.0.2.11')
     assert result.returncode==2 and 'prepared_inputs_changed' in result.stderr
     assert mutations(calls)==[]
 
+
+def test_remote_docker_endpoint_is_rejected_before_any_docker_call(tmp_path, monkeypatch):
+    deploy = Deployment(tmp_path)
+    result, calls = deploy.run("prepare", DOCKER_HOST="ssh://unreviewed.example")
+    assert result.returncode == 2 and "docker_endpoint_unreviewed" in result.stderr
+    assert calls == []
+
 @pytest.mark.parametrize('values',[
-    {'SMOKE_RESOLVE_HOST':'rscwz.cn'}, {'SMOKE_RESOLVE_IP':'192.0.2.10'},
+    {'SMOKE_RESOLVE_HOST':'rscwz.cn', 'SMOKE_RESOLVE_IP':''},
+    {'SMOKE_RESOLVE_HOST':'', 'SMOKE_RESOLVE_IP':'192.0.2.10'},
     {'SMOKE_RESOLVE_HOST':'other.invalid','SMOKE_RESOLVE_IP':'192.0.2.10'},
     {'SMOKE_RESOLVE_HOST':'rscwz.cn','SMOKE_RESOLVE_IP':'another.invalid'},
 ])

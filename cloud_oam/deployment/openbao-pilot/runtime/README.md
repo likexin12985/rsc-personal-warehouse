@@ -1,6 +1,6 @@
 # OpenBao 2.7.1 试点常驻配置与首次封存控制器
 
-**试点 MVP，不等同完整 V1。此目录是可审查的部署候选，尚未执行正式安装、初始化、解封、云身份配置或业务启用。** 旧隔离 Agent 的 19 项、template 的 14 项证明保持原来源；它们不证明本目录的常驻配置、周期 service token 或正式恢复已通过。
+**试点 MVP，不等同完整 V1。此目录仍是可审查的部署候选；正式 init/unseal、auth/OIDC 配置及部分 Agent 首次登录已有独立阶段性回执，但不等于本目录的安装、常驻重启/续期、API/gate 只读挂载、云身份对象权限或业务启用已通过。** 旧隔离 Agent 的 19 项、template 的 14 项证明保持原来源；它们不证明本目录的常驻配置、周期 service token 或正式恢复已通过。
 
 ## 运行坐标
 
@@ -51,7 +51,9 @@ query 非空拒绝；匹配后重写为固定路径；客户端请求头全部�
 
 这份 Caddyfile 仍需固定镜像的真实 `validate` 与两正向/方法/query/管理路径拒绝检查；文字审查与本地字符串测试不替代 Caddy 的解析及 HTTPS 回读。metadata 公网可用也不代表 RAM/STS 兑换或附件/短信权限通过。
 
-## 正式 init 与封存草案
+## 正式 init 与封存草案（设计入口）
+
+本节保留首次封存控制器的设计约束和执行顺序；正式 init/unseal 的实际阶段性结果见 `artifacts/openbao-runtime-20261009/formal-init-01/` 与 `formal-unseal-01/`，不能把本节的命令草案或本地预检当作完整生产验收。
 
 `runtime_init.py` 只提供 `prepare-vault`、`status`、`initialize`、`recover`，**没有 unseal/configure 接口**。后续必须以正式封存成功、独立复核和数据库/密钥选择为前提实施解封/配置。它不读取密码、自动 mount image、调用 Keychain、安装依赖或把份额/root token放到命令行。
 

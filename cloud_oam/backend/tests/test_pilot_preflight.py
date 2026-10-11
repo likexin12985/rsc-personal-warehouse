@@ -115,7 +115,7 @@ def _document(tmp_path: Path) -> tuple[dict, Path]:
             "OAM_LEGACY_PROTOTYPE_WRITES_ENABLED": "false",
             "OAM_DATABASE_URL": "postgresql+psycopg://star_oam_api:api-" + "c" * 32 + "@db:5432/star_oam",
             "OAM_SMS_LOGIN_ENABLED": "true",
-            "OAM_SMS_PROVIDER": "aliyun_pnvs",
+            "OAM_SMS_PROVIDER": "aliyun_dypns",
             "OAM_SMS_CREDENTIAL_MODE": "default_chain",
             "OAM_SMS_ACCESS_KEY_ID": "",
             "OAM_SMS_ACCESS_KEY_SECRET": "",
@@ -148,8 +148,10 @@ def _document(tmp_path: Path) -> tuple[dict, Path]:
             "OAM_KMS_REGION": "cn-shanghai",
             "OAM_KMS_ENCRYPTED_DATA_KEY_REGISTRY_PATH": str(registry),
         },
-        "volumes": [{"type": "bind", "source": str(registry), "target": str(registry), "read_only": True},
-                    {"type": "bind", "source": "/run/rsc-identity/files", "target": "/run/rsc-identity/files", "read_only": True}],
+        "volumes": [{"type": "bind", "source": str(registry), "target": str(registry), "read_only": True,
+                     "bind": {"create_host_path": False}},
+                    {"type": "bind", "source": "/run/rsc-identity/files", "target": "/run/rsc-identity/files",
+                     "read_only": True, "bind": {"create_host_path": False}}],
         "networks": {"backend": {"ipv4_address": "172.18.0.4"}},
     }
     document = {
@@ -183,6 +185,15 @@ def test_pilot_preflight_rejects_legacy_sts_values_for_default_chain(tmp_path):
     environment["OAM_SMS_SECURITY_TOKEN_EXPIRES_AT"] = (
         datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
     assert not {item["name"]: item["ok"] for item in checks_for(document, compose_file)}["h5_sms_login"]
+
+
+def test_pilot_preflight_rejects_pnvs_without_reviewed_oidc_coordinates(tmp_path):
+    document, compose_file = _document(tmp_path)
+    environment = document["services"]["api"]["environment"]
+    environment["OAM_SMS_PROVIDER"] = "aliyun_pnvs"
+    checks = {item["name"]: item["ok"] for item in checks_for(document, compose_file)}
+    assert checks["pnvs_oidc_declared_for_provider"] is False
+    assert checks["pnvs_oidc_public_contract"] is False
     environment["OAM_SMS_SECURITY_TOKEN_EXPIRES_AT"] = datetime.now(timezone.utc).isoformat()
     assert not {item["name"]: item["ok"] for item in checks_for(document, compose_file)}["h5_sms_login"]
 

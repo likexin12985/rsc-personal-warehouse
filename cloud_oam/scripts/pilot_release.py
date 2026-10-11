@@ -31,14 +31,14 @@ if __package__:
     from .pilot_preflight import checks_for, strict_object, PILOT_PROJECT_RE, IMAGE_TAG_RE, PILOT_MVP_SCOPE
     from .pilot_preflight import OPENBAO_ENV_FIELDS, _openbao_settings, _readonly_source, private_oss_oidc_configured
     from .pilot_preflight import pnvs_oidc_declared, pnvs_oidc_configuration_checks
-    from .pilot_preflight import OPENBAO_DEPLOYMENT_FIELDS, openbao_peer_declaration, restricted_process_configuration
+    from .pilot_preflight import OPENBAO_DEPLOYMENT_FIELDS, openbao_peer_declaration, restricted_process_configuration, metadata_peer_declaration, FULL_ID_RE
     from .pilot_preflight import bind_disables_host_path_creation
     from .pilot_network_preflight import check_networks
 else:
     from pilot_preflight import checks_for, strict_object, PILOT_PROJECT_RE, IMAGE_TAG_RE, PILOT_MVP_SCOPE
     from pilot_preflight import OPENBAO_ENV_FIELDS, _openbao_settings, _readonly_source, private_oss_oidc_configured
     from pilot_preflight import pnvs_oidc_declared, pnvs_oidc_configuration_checks
-    from pilot_preflight import OPENBAO_DEPLOYMENT_FIELDS, openbao_peer_declaration, restricted_process_configuration
+    from pilot_preflight import OPENBAO_DEPLOYMENT_FIELDS, openbao_peer_declaration, restricted_process_configuration, metadata_peer_declaration, FULL_ID_RE
     from pilot_preflight import bind_disables_host_path_creation
     from pilot_network_preflight import check_networks
 
@@ -211,7 +211,8 @@ def live_bind_specs(document):
     environment = api.get('environment', {})
     specs = {}
     oss_declared = environment.get('OAM_FILE_STORAGE_CREDENTIAL_MODE') == 'oidc_role_arn'
-    pnvs_declared = any(pnvs_oidc_declared(service.get('environment', {})) for service in services.values())
+    pnvs_declared = (environment.get('OAM_SMS_PROVIDER') == 'aliyun_pnvs'
+                     or any(pnvs_oidc_declared(service.get('environment', {})) for service in services.values()))
     writers = {}
     for kind, key, declared in (
         ('oss_oidc', 'RSC_OSS_OIDC_WRITER', oss_declared),
@@ -445,6 +446,8 @@ class Release:
         self.smoke_target = {key:os.environ.get(key,'') for key in ('SMOKE_RESOLVE_HOST','SMOKE_RESOLVE_IP')}
         host, address = self.smoke_target.values()
         require(bool(host)==bool(address), 'smoke_resolution_invalid')
+        if urlsplit(self.origin).scheme == 'https':
+            require(bool(host) and bool(address), 'smoke_resolution_invalid')
         if host:
             require(host == urlsplit(self.origin).hostname, 'smoke_resolution_invalid')
             try: ipaddress.ip_address(address)
@@ -461,6 +464,8 @@ class Release:
         self.project_state = private_directory(self.state/self.project)
         self.receipts = private_directory(self.project_state/'receipts')
         self.receipt_file = self.receipts/(self.tag+'.json')
+        for key in ('DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH'):
+            require(not os.environ.get(key), 'docker_endpoint_unreviewed')
         # Compose selection flags come only from explicit command arguments.
         self.environment = {key:value for key,value in os.environ.items() if not key.startswith('COMPOSE_')}
         self.environment.update(RSC_RELEASE_PROFILE='pilot', RSC_API_IMAGE='rsc-pilot-api:'+self.tag,
@@ -561,6 +566,12 @@ class Release:
             all_inputs['registry_owners'] = registry_owners
         if any(row['kind'] == 'openbao_socket' for row in live_specs.values()):
             all_inputs['openbao_peer'] = self.openbao_peer_metadata(runtime)
+        metadata_peer = self.metadata_peer_metadata(runtime)
+        if metadata_peer is not None:
+            # The network Containers member set and web endpoint IDs are
+            # mutable cutover state; metadata_peer_metadata deliberately
+            # returns only immutable peer/network/source facts here.
+            all_inputs['metadata_peer'] = metadata_peer
         return dict(input_sha256=digest(encoded(all_inputs)), source_sha256=source_hash,
                     configuration_sha256=config_hash), mounts
 
@@ -603,6 +614,157 @@ class Release:
                     host={key: host.get(key) for key in ('GroupAdd', 'CapDrop', 'CapAdd', 'Privileged', 'SecurityOpt',
                         'ReadonlyRootfs', 'NetworkMode', 'PidMode', 'IpcMode', 'UsernsMode', 'Devices', 'PortBindings')},
                     mounts=sorted(mounts, key=lambda mount: mount['Destination']))
+
+    @staticmethod
+    def _metadata_file_metadata(path, expected, *, label):
+        """Hash only the public gateway/Caddy file; never open the UDS."""
+        path = Path(path)
+        require(path.is_absolute() and path == path.resolve() and path.is_file()
+                and not path.is_symlink(), f'metadata_{label}_invalid')
+        # Every ancestor is an immutable root-owned, non-writable directory;
+        # lstat avoids accepting a replacement symlink during cutover.
+        for ancestor in (path.parent, *path.parent.parents):
+            info = ancestor.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and info.st_gid == 0
+                    and not (stat.S_IMODE(info.st_mode) & 0o022), f'metadata_{label}_ancestor_invalid')
+        info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0 and info.st_nlink == 1
+                and stat.S_IMODE(info.st_mode) & 0o022 == 0,
+                f'metadata_{label}_invalid')
+        actual = digest(path.read_bytes())
+        require(actual == expected, f'metadata_{label}_digest_mismatch')
+        return dict(path=str(path), sha256=actual, mode=stat.S_IMODE(info.st_mode),
+                    owner=info.st_uid, group=info.st_gid, inode=info.st_ino)
+
+    def metadata_peer_metadata(self, document):
+        """Read the exact metadata peer and network using public inspect fields."""
+        declaration = metadata_peer_declaration(document)
+        if declaration is None:
+            return None
+        labels = declaration['labels']
+        rows = json.loads(self.run(['docker', 'inspect', '--type', 'container', labels['container-id']], diagnostic=True))
+        require(isinstance(rows, list) and len(rows) == 1, 'metadata_peer_inspection_invalid')
+        row = rows[0]
+        host, state, config = (row.get(key, {}) for key in ('HostConfig', 'State', 'Config'))
+        require(row.get('Id') == labels['container-id'] and row.get('Image') == labels['image-id'],
+                'metadata_peer_identity_changed')
+        require(state.get('Running') is True and state.get('Status') == 'running'
+                and not any(state.get(key) for key in ('Paused', 'Restarting', 'OOMKilled'))
+                and type(state.get('Pid')) is int and state['Pid'] > 0
+                and state.get('StartedAt') == labels['started-at'], 'metadata_peer_state_invalid')
+        require(config.get('User') == '23205:23205'
+                and set(str(value) for value in host.get('GroupAdd') or []) == {'23110'},
+                'metadata_peer_user_invalid')
+        require(restricted_process_configuration(host, inspected=True)
+                and host.get('ReadonlyRootfs') is True
+                and host.get('NetworkMode', '') in ('', 'bridge', declaration['network_name'])
+                and host.get('PidMode', '') in ('', 'private')
+                and host.get('IpcMode', '') in ('', 'private')
+                and not host.get('UsernsMode') and not host.get('Devices')
+                and not host.get('PortBindings') and not row.get('NetworkSettings', {}).get('Ports'),
+                'metadata_peer_isolation_invalid')
+        expected_mounts = {
+            '/runtime/caddy': '/opt/rsc-openbao/caddy/caddy',
+            '/etc/caddy/Caddyfile': '/etc/rsc-openbao/gateway.Caddyfile',
+            '/run/rsc-bao': '/run/rsc-openbao/socket',
+        }
+        mounts = row.get('Mounts', [])
+        require(isinstance(mounts, list) and len(mounts) == 3, 'metadata_peer_mount_invalid')
+        public = {}
+        for mount in mounts:
+            target = mount.get('Destination')
+            require(target in expected_mounts and mount.get('Source') == expected_mounts[target]
+                    and mount.get('Type') == 'bind' and mount.get('RW') is False
+                    and mount.get('Propagation') == 'rprivate', 'metadata_peer_mount_invalid')
+            if target == '/run/rsc-bao':
+                continue  # Never stat/open/read the socket directory contents.
+            public[target] = mount['Source']
+        require(set(public) == {'/runtime/caddy', '/etc/caddy/Caddyfile'}, 'metadata_peer_mount_invalid')
+        binary = self._metadata_file_metadata(public['/runtime/caddy'], labels['binary-sha256'], label='binary')
+        gateway = self._metadata_file_metadata(public['/etc/caddy/Caddyfile'], labels['gateway-sha256'], label='gateway')
+        networks = row.get('NetworkSettings', {}).get('Networks', {})
+        require(isinstance(networks, dict) and set(networks) == {declaration['network_name']},
+                'metadata_peer_network_isolation_invalid')
+        network = networks.get(declaration['network_name']) if isinstance(networks, dict) else None
+        require(isinstance(network, dict) and network.get('NetworkID') == labels['network-id'],
+                'metadata_peer_network_invalid')
+        aliases = network.get('Aliases') or []
+        require('rsc-bao-metadata' in aliases and all(isinstance(alias, str) for alias in aliases),
+                'metadata_peer_alias_invalid')
+        # Inspect returns full IDs; --no-trunc belongs to network ls and is
+        # rejected by network inspect before the daemon can read this object.
+        net_rows = json.loads(self.run(['docker', 'network', 'inspect', labels['network-id']], diagnostic=True))
+        require(isinstance(net_rows, list) and len(net_rows) == 1, 'metadata_network_inspection_invalid')
+        network_row = net_rows[0]
+        require(network_row.get('Id') == labels['network-id'] and network_row.get('Name') == declaration['network_name']
+                and network_row.get('Driver') == 'bridge' and network_row.get('Internal') is True
+                and (network_row.get('Labels') or {}).get('com.docker.compose.project') == 'rsc-openbao'
+                and (network_row.get('Labels') or {}).get('com.docker.compose.network') == 'metadata',
+                'metadata_network_identity_invalid')
+        network_public = {key: network_row.get(key) for key in ('Id', 'Name', 'Driver', 'Internal', 'IPAM', 'Options', 'Labels')}
+        return dict(container_id=row['Id'], image_id=row['Image'], started_at=state['StartedAt'], pid=state['Pid'],
+                    user=config['User'], groups=sorted(str(value) for value in host.get('GroupAdd') or []),
+                    host={key: host.get(key) for key in ('CapDrop', 'CapAdd', 'Privileged', 'SecurityOpt',
+                        'ReadonlyRootfs', 'NetworkMode', 'PidMode', 'IpcMode', 'UsernsMode', 'Devices', 'PortBindings')},
+                    mounts=[dict(Type='bind', Source=expected_mounts[target], Destination=target,
+                                 RW=False, Propagation='rprivate') for target in sorted(expected_mounts)],
+                    binary=binary, gateway=gateway, network=network_public)
+
+    @staticmethod
+    def metadata_expected_members(document, phase, *, legacy_web_id=None, candidate_web_id=None):
+        """Return the phase-specific exact network membership set."""
+        declaration = metadata_peer_declaration(document)
+        require(declaration is not None, 'metadata_peer_declaration_required')
+        metadata_id = declaration['labels']['container-id']
+        phases = {
+            'prepare': {metadata_id, legacy_web_id},
+            'beforeStart': {metadata_id},
+            'afterWebCreate': {metadata_id, candidate_web_id},
+            'afterSmoke': {metadata_id, candidate_web_id},
+        }
+        require(phase in phases, 'metadata_membership_phase_invalid')
+        expected = phases[phase]
+        require(all(isinstance(item, str) and FULL_ID_RE.fullmatch(item) for item in expected),
+                'metadata_membership_identity_invalid')
+        return expected
+
+    def validate_metadata_membership(self, document, phase, observed, *, legacy_web_id=None, candidate_web_id=None):
+        expected = self.metadata_expected_members(document, phase, legacy_web_id=legacy_web_id,
+                                                  candidate_web_id=candidate_web_id)
+        require(isinstance(observed, (set, list, tuple)) and set(observed) == expected,
+                'metadata_membership_mismatch')
+        return True
+
+    def metadata_network_membership(self, document, phase, *, legacy_web_id=None, candidate_web_id=None):
+        """Read only network Containers keys, then enforce one cutover phase."""
+        declaration = metadata_peer_declaration(document)
+        require(declaration is not None, 'metadata_peer_declaration_required')
+        network_id = declaration['labels']['network-id']
+        rows = json.loads(self.run(['docker', 'network', 'inspect', network_id], diagnostic=True))
+        require(isinstance(rows, list) and len(rows) == 1 and rows[0].get('Id') == network_id,
+                'metadata_network_inspection_invalid')
+        containers = rows[0].get('Containers', {})
+        require(isinstance(containers, dict), 'metadata_network_membership_invalid')
+        observed = set(containers)
+        self.validate_metadata_membership(document, phase, observed,
+                                          legacy_web_id=legacy_web_id, candidate_web_id=candidate_web_id)
+        return observed
+
+    def legacy_web_metadata(self, document):
+        """Bind the declared migration predecessor by immutable public facts."""
+        declaration = metadata_peer_declaration(document)
+        require(declaration is not None, 'metadata_peer_declaration_required')
+        labels = declaration['labels']
+        required = {'legacy-web-container-id', 'legacy-web-image-id', 'legacy-web-started-at'}
+        require(required <= set(labels), 'metadata_legacy_web_declaration_required')
+        rows = json.loads(self.run(['docker', 'inspect', '--type', 'container', labels['legacy-web-container-id']], diagnostic=True))
+        require(isinstance(rows, list) and len(rows) == 1, 'metadata_legacy_web_inspection_invalid')
+        row = rows[0]; state = row.get('State', {})
+        require(row.get('Id') == labels['legacy-web-container-id']
+                and row.get('Image') == labels['legacy-web-image-id']
+                and state.get('StartedAt') == labels['legacy-web-started-at'],
+                'metadata_legacy_web_identity_changed')
+        return dict(container_id=row['Id'], image_id=row['Image'], started_at=state['StartedAt'])
 
     def stable(self):
         current = self.resolve()
@@ -714,6 +876,27 @@ class Release:
                     and matches[0].get('Destination') == target and matches[0].get('Source') == binding['source']
                     and matches[0].get('RW') is False and matches[0].get('Propagation') == 'rprivate',
                     'container_runtime_mount_mismatch')
+        if service == 'web':
+            declaration = metadata_peer_declaration(decoded_config(self.document))
+            if declaration is not None:
+                caddy_source = declaration['caddy_source']
+                if hasattr(self, 'static_mounts') and caddy_source in self.static_mounts:
+                    snapshot = self.static_mounts[caddy_source]['snapshot']
+                    require(tree_digest(Path(snapshot)) == self.static_mounts[caddy_source]['sha256'],
+                            'metadata_caddy_snapshot_changed')
+                    caddy_source = snapshot
+                caddy_mounts = [mount for mount in row.get('Mounts', [])
+                                if mount.get('Destination') == '/etc/caddy/Caddyfile']
+                require(len(caddy_mounts) == 1 and caddy_mounts[0].get('Type') == 'bind'
+                        and caddy_mounts[0].get('Source') == caddy_source
+                        and caddy_mounts[0].get('RW') is False
+                        and caddy_mounts[0].get('Propagation') == 'rprivate',
+                        'metadata_caddy_runtime_mount_invalid')
+                metadata_network = row.get('NetworkSettings', {}).get('Networks', {}).get(declaration['network_name'])
+                require(isinstance(metadata_network, dict)
+                        and metadata_network.get('NetworkID') == declaration['labels']['network-id']
+                        and 'rsc-bao-metadata' not in (metadata_network.get('Aliases') or []),
+                        'metadata_web_alias_invalid')
         return row
 
     def database_identity(self):
@@ -769,7 +952,13 @@ class Release:
             self.fingerprints,self.mounts=self.fingerprint(self.document)
             self.head=expected_head(self.root)
             self.stage='network_check'; self.network_check()
+            metadata_declaration = metadata_peer_declaration(decoded_config(self.document))
             if self.action=='prepare':
+                if metadata_declaration is not None and 'legacy-web-container-id' in metadata_declaration['labels']:
+                    self.legacy_web_metadata(self.document)
+                    self.metadata_network_membership(
+                        self.document, 'prepare',
+                        legacy_web_id=metadata_declaration['labels']['legacy-web-container-id'])
                 self.stage='snapshot'; self.capture_mounts()
                 self.stage='build'; self.stable()
                 self.build_images()
@@ -808,12 +997,19 @@ class Release:
             require(re.search(r':(?:80|443)->',ports) is None,'public_ports_occupied')
             listeners=self.run(['ss','-H','-ltn'],diagnostic=True)
             require(not host_public_tcp_ports(listeners),'public_ports_occupied')
+            if metadata_declaration is not None:
+                # Handover is an explicitly reviewed external action.  The
+                # release worker only observes the exact set and fails closed;
+                # it never disconnects or stops an arbitrary predecessor.
+                self.metadata_network_membership(self.document, 'beforeStart')
             self.stage='kms_pin_gate'; self.invoke(['up','--no-deps','--no-build','--pull','never','--force-recreate',
                 '--abort-on-container-exit','--exit-code-from','kms-pin-gate','kms-pin-gate'])
             self.container('kms-pin-gate',exited=True)
             require(self.database_identity()==identity,'prepared_database_changed')
             self.stage='application'; self.invoke(['up','-d','--no-deps','--no-build','--pull','never','--wait','--wait-timeout','60','api','web'])
-            self.container('api');self.container('web')
+            self.container('api'); web_row = self.container('web')
+            if metadata_declaration is not None:
+                self.metadata_network_membership(self.document, 'afterWebCreate', candidate_web_id=web_row['Id'])
             require(self.database_identity()==identity,'prepared_database_changed')
             self.stage='smoke'
             for attempt in range(3):
@@ -824,6 +1020,8 @@ class Release:
                     continue
                 else:
                     self.stable()
+                    if metadata_declaration is not None:
+                        self.metadata_network_membership(self.document, 'afterSmoke', candidate_web_id=web_row['Id'])
                     print('pilot-deploy: start checks completed; immutable candidate and read-only smoke passed; business acceptance remains separate')
                     return
             raise Refused('smoke_checks_failed')

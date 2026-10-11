@@ -23,6 +23,14 @@ case "$BASE_URL" in
     exit 2
     ;;
 esac
+case "$BASE_URL" in
+  https://*)
+    if [ -z "${SMOKE_RESOLVE_HOST:-}" ] || [ -z "${SMOKE_RESOLVE_IP:-}" ]; then
+      printf '%s\n' 'HTTPS smoke requires reviewed SMOKE_RESOLVE_HOST and SMOKE_RESOLVE_IP' >&2
+      exit 2
+    fi
+    ;;
+esac
 
 curl_readonly() {
   if [ -n "${SMOKE_RESOLVE_HOST:-}" ] && [ -n "${SMOKE_RESOLVE_IP:-}" ]; then

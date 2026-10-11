@@ -134,6 +134,26 @@ BEGIN
     END IF;
     IF current_setting('transaction_isolation')<>'read committed' THEN
         RAISE EXCEPTION 'condition decision seal fence requires read committed' USING ERRCODE='23514'; END IF;
+    -- Notification projections remain under the deferred condition-decision
+    -- fence, but ordinary inventory notifications must not serialize
+    -- unrelated transactions on the shared ledger head. Only condition
+    -- evidence (or the reserved decision-seal namespace) participates in the
+    -- global decision lock. A payload request_id/request_reference alone is
+    -- insufficient because shipment and receipt notifications carry them.
+    IF TG_TABLE_NAME='notification_events'
+       AND NOT (
+          COALESCE(COALESCE(next_row->>'business_type',prior->>'business_type') IN ('stock_condition_decision_seal','stock_condition_event'),false)
+          OR COALESCE(COALESCE(next_row->>'event_type',prior->>'event_type') LIKE 'stock_condition.%',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'schema_version',prior->'payload_jsonb'->>'schema_version')='condition_result/1',false)
+          OR COALESCE(COALESCE(next_row->>'action',prior->>'action')='seal_condition_decision_request',false)
+          OR COALESCE(COALESCE(next_row->>'request_id',prior->'request_id') LIKE 'condition-decision-seal:%',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type')='stock_condition_decision_seal',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_decision_request',false)
+          OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-decision-seal:%',false)
+       ) THEN
+        IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+        RETURN NEW;
+    END IF;
     PERFORM 1 FROM public.inventory_ledger_heads WHERE stream_key='inventory' FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'condition decision seal fence ledger head required' USING ERRCODE='23514'; END IF;
     IF TG_OP='DELETE' THEN RETURN OLD; END IF;

@@ -1,6 +1,6 @@
 # D：核心三个 Agent 的一次性首次凭据交付
 
-状态：本地产物和新增检查，不是正式凭据签发、Agent 启动或上线通过。仅 `transit`、`oss`、`pnvs`，不复用这些身份执行 backup writer/reader/recovery。
+状态：本目录是控制器设计与本地新增检查，不能单独作为正式凭据签发、Agent 常驻、云权限或上线通过证据。正式 auth/OIDC 配置和部分 Agent 首次登录已有独立阶段性回执；本目录仍不包含真实凭据。仅 `transit`、`oss`、`pnvs`，不复用这些身份执行 backup writer/reader/recovery。
 
 前置条件：固定 Bao 容器的来源、挂载、UID、PID、资源边界通过 `runtime_init.Remote.preflight`；A 已首次解封，B auth/OIDC 精确回读已完成；原加密映像已由用户挂载 RW，init runId、PGP fingerprint 和 Bao 完整 ID 仍对应同一次初始化。根任务统一协调，不在此文档存真实 root token、SecretID 或恢复口令。
 
@@ -29,4 +29,4 @@
 
 `bootstrap-writer-local-01` 的 5 个新 unittest 检查真实本地 O_EXCL/0600/单链接/不覆盖和仅元数据状态；不是 Linux UID 实测。`bootstrap-local-01` 新 controller/remote 10 节点首轮 9 通过、1 个测试临时目录因 macOS `/var` symlink 被正确拒绝；原失败保留。测试用 `.resolve()` 修正，`bootstrap-local-02` 仅复验该 1 节点和新增的容器身份/隔离 1 节点，2 通过。总计 16 个不同新增节点最新均通过，17 次执行；未重跑已终态的旧 14/19/periodic 或 hosted PG16 套件。
 
-尚未在 Linux 执行 D；尚未生成正式 SecretID；本机 Python 堆未全量锁页，不宣称 secure-memory 证明。现存所有 frozen runtime/configure/unseal 输入保持不变。本目录可能受 `runtime/` ignore 影响，提交时仅精确加入本 README、三个 `runtime_bootstrap*.py` 与两个对应新测试；不加入 journal、生成 bundle、普通 artifacts 或任何真实秘密。
+本目录的 D 流程未在此处重跑；正式 SecretID 交付和 Agent 首次登录另有 `formal-bootstrap-{transit,oss,pnvs}-01/` 独立回执，不能与本目录的本地检查合并为一次全套通过。本机 Python 堆未全量锁页，不宣称 secure-memory 证明。现存所有 frozen runtime/configure/unseal 输入保持不变。本目录可能受 `runtime/` ignore 影响，提交时仅精确加入本 README、三个 `runtime_bootstrap*.py` 与两个对应新测试；不加入 journal、生成 bundle、普通 artifacts 或任何真实秘密。

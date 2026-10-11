@@ -643,6 +643,12 @@ def begin_authentication_operation(
         auth_session_id=checked_auth_session_id,
         input_refresh_token_id=checked_input_token_id,
         expires_at=checked_expires_at,
+        # The database CHECK constraint is intentionally based on the
+        # operation's authoritative request clock, not on the later flush
+        # clock.  This also keeps a caller-provided bounded test clock and a
+        # real PostgreSQL clock consistent when the request spans a boundary.
+        created_at=checked_now,
+        updated_at=checked_now,
     )
     _ensure_outer_transaction(db)
     try:

@@ -460,7 +460,7 @@ REVIEW_COMMAND_STATUS_REVISION = (
     / "versions"
     / "20260906_0063_review_command_status.py"
 )
-HEAD_REVISION = '20261230_0181'
+HEAD_REVISION = '20261231_0182'
 NONOPENING_STOCKTAKE_REVIEW_RECOUNT_REVISION_ID = "20260901_0032"
 STOCKTAKE_COUNT_LEDGER_BOUNDARY_REVISION_ID = "20260901_0033"
 STOCKTAKE_RECOUNT_SELECTED_SCOPE_REVISION_ID = "20260901_0034"
@@ -1720,6 +1720,7 @@ def test_pg16_gate_head_matches_alembic_graph() -> None:
     script = ScriptDirectory.from_config(_config("sqlite+pysqlite:///:memory:"))
     assert constants["HEAD_REVISION"] == script.get_current_head()
     import test_postgresql16_release_gate as pg_gate
+    from app import database_security  # noqa: F401: activate the reviewed runtime overlays
     from app.oam_sync_scope_security import OAM_SYNC_FUNCTION_MANIFEST
     assert pg_gate._head_runtime_ready_hash() == OAM_SYNC_FUNCTION_MANIFEST["rsc_oam_runtime_binding_ready_0044()"][6]
 
@@ -1729,7 +1730,9 @@ def test_revision_history_has_single_current_head() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     head = script.get_revision(HEAD_REVISION)
     assert head is not None
-    assert head.down_revision == '20261229_0180'
+    assert head.down_revision == '20261230_0181'
+    head = script.get_revision(head.down_revision)
+    assert head is not None and head.down_revision == '20261229_0180'
     head = script.get_revision(head.down_revision)
     assert head is not None and head.down_revision == '20261228_0179'
     head = script.get_revision(head.down_revision)
