@@ -15,12 +15,12 @@ from pathlib import Path
 REVISION = "20261231_0182"
 SIGNATURE = "rsc_condition_decision_seal_lock()"
 LEGACY_SHA256 = "3e954671d1f03deb037d6cf7c70ce7f171e12a44c2402cb44e2c30c1d2a44d7c"
-SUCCESSOR_SHA256 = "cbbbb786f5a92b9e463b1334d0a60a1842eb145ec70fa78bcaf15a2b831f2a13"
+SUCCESSOR_SHA256 = "851a8086b62358c37007344d45390110e2fc64adc2331848873bd111c628b08c"
 SEAL_SIGNATURE = "rsc_condition_seal_lock()"
 SEAL_LEGACY_SHA256 = "dc92d427506ff729adb759f3adcc2ed772cede1a3cfe9715e6a158c17cb6fb90"
 # Filled from the byte-exact successor source below; this is intentionally a
 # published digest rather than a runtime-derived acceptance value.
-SEAL_SUCCESSOR_SHA256 = "73101a87c866ee3a80a0805befdf3609e39fbcf27ba10318951ffac7f70d1d0a"
+SEAL_SUCCESSOR_SHA256 = "926e8ae246c9ceb44f08768ea2a3d40b8b8841dc03a03043751777c728a77eec"
 
 # Keep this fragment byte-for-byte identical to the reviewed successor
 # migration.  The deferred fence remains broad; only ordinary notification
@@ -31,8 +31,8 @@ SUCCESSOR_FRAGMENT = """    -- Notification projections remain under the deferre
     -- fence, but ordinary inventory notifications must not serialize
     -- unrelated transactions on the shared ledger head. Only condition
     -- evidence (or the reserved decision-seal namespace) participates in the
-    -- global decision lock. A payload request_id/request_reference alone is
-    -- insufficient because shipment and receipt notifications carry them.
+    -- global decision lock. Any condition reference evidence, including
+    -- payload request IDs, is retained; generic transaction fields bypass.
     IF TG_TABLE_NAME='notification_events'
        AND NOT (
           COALESCE(COALESCE(next_row->>'business_type',prior->>'business_type') IN ('stock_condition_decision_seal','stock_condition_event'),false)
@@ -43,6 +43,23 @@ SUCCESSOR_FRAGMENT = """    -- Notification projections remain under the deferre
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type')='stock_condition_decision_seal',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_decision_request',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-decision-seal:%',false)
+
+          OR COALESCE(COALESCE(next_row->>'key_token',prior->>'key_token') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'raw_key_hash',prior->>'raw_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'regional_key_hash',prior->>'regional_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'headquarters_key_hash',prior->>'headquarters_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'disposition_key_hash',prior->>'disposition_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'return_key_hash',prior->>'return_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'reversal_key_hash',prior->>'reversal_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'approval_key_hash',prior->>'approval_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'correction_key_hash',prior->>'correction_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'recovery_key_hash',prior->>'recovery_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'scrap_key_hash',prior->>'scrap_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'condition_key_hash',prior->>'condition_key_hash') IS NOT NULL,false)
+          OR COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id',next_row->'metadata_jsonb'->>'request_id',prior->'metadata_jsonb'->>'request_id',next_row->'after_jsonb'->>'request_id',prior->'after_jsonb'->>'request_id') IS NOT NULL
+          OR COALESCE(next_row->'payload_jsonb'->>'request_reference',prior->'payload_jsonb'->>'request_reference',next_row->'metadata_jsonb'->>'request_reference',prior->'metadata_jsonb'->>'request_reference',next_row->'after_jsonb'->>'request_reference',prior->'after_jsonb'->>'request_reference') IS NOT NULL
+          OR COALESCE(next_row->'payload_jsonb'->>'actor_user_id',prior->'payload_jsonb'->>'actor_user_id',next_row->'metadata_jsonb'->>'actor_user_id',prior->'metadata_jsonb'->>'actor_user_id',next_row->'after_jsonb'->>'actor_user_id',prior->'after_jsonb'->>'actor_user_id') IS NOT NULL
+          OR COALESCE(next_row->'payload_jsonb'->>'actor_person_id',prior->'payload_jsonb'->>'actor_person_id',next_row->'metadata_jsonb'->>'actor_person_id',prior->'metadata_jsonb'->>'actor_person_id',next_row->'after_jsonb'->>'actor_person_id',prior->'after_jsonb'->>'actor_person_id') IS NOT NULL
        ) THEN
         IF TG_OP='DELETE' THEN RETURN OLD; END IF;
         RETURN NEW;
@@ -66,6 +83,23 @@ SEAL_SUCCESSOR_FRAGMENT = """    -- Notification projections remain under the de
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type') IN ('stock_condition_request_seal','stock_condition_event'),false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_request',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-seal:%',false)
+
+          OR COALESCE(COALESCE(next_row->>'key_token',prior->>'key_token') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'raw_key_hash',prior->>'raw_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'regional_key_hash',prior->>'regional_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'headquarters_key_hash',prior->>'headquarters_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'disposition_key_hash',prior->>'disposition_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'return_key_hash',prior->>'return_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'reversal_key_hash',prior->>'reversal_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'approval_key_hash',prior->>'approval_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'correction_key_hash',prior->>'correction_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'recovery_key_hash',prior->>'recovery_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'scrap_key_hash',prior->>'scrap_key_hash') IS NOT NULL,false)
+          OR COALESCE(COALESCE(next_row->>'condition_key_hash',prior->>'condition_key_hash') IS NOT NULL,false)
+          OR COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id',next_row->'metadata_jsonb'->>'request_id',prior->'metadata_jsonb'->>'request_id',next_row->'after_jsonb'->>'request_id',prior->'after_jsonb'->>'request_id') IS NOT NULL
+          OR COALESCE(next_row->'payload_jsonb'->>'request_reference',prior->'payload_jsonb'->>'request_reference',next_row->'metadata_jsonb'->>'request_reference',prior->'metadata_jsonb'->>'request_reference',next_row->'after_jsonb'->>'request_reference',prior->'after_jsonb'->>'request_reference') IS NOT NULL
+          OR COALESCE(next_row->'payload_jsonb'->>'actor_user_id',prior->'payload_jsonb'->>'actor_user_id',next_row->'metadata_jsonb'->>'actor_user_id',prior->'metadata_jsonb'->>'actor_user_id',next_row->'after_jsonb'->>'actor_user_id',prior->'after_jsonb'->>'actor_user_id') IS NOT NULL
+          OR COALESCE(next_row->'payload_jsonb'->>'actor_person_id',prior->'payload_jsonb'->>'actor_person_id',next_row->'metadata_jsonb'->>'actor_person_id',prior->'metadata_jsonb'->>'actor_person_id',next_row->'after_jsonb'->>'actor_person_id',prior->'after_jsonb'->>'actor_person_id') IS NOT NULL
        ) THEN
         IF TG_OP='DELETE' THEN RETURN OLD; END IF;
         RETURN NEW;

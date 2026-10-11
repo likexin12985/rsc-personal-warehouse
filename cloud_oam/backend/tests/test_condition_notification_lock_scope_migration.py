@@ -29,14 +29,13 @@ def test_successor_keeps_frozen_catalog_and_only_scopes_notification_lock():
     assert "event_type',prior->>'event_type') LIKE 'stock_condition.%'" in fixed
     assert "schema_version',prior->'payload_jsonb'->>'schema_version')='condition_result/1'" in fixed
     assert 'LIKE \'condition-decision-seal:%\'' in fixed
-    # JSON fields are nullable for ordinary notification projections.  Keep
-    # the guard two-valued so NULL metadata cannot fall through to FOR UPDATE.
-    # A request_id/request_reference alone is deliberately not a lock marker:
-    # shipment and receipt notifications carry request_id in their payload.
+    # Keep the guard two-valued and retain any condition reference evidence.
     assert "COALESCE(COALESCE(next_row->>'request_id',prior->>'request_id') LIKE 'condition-decision-seal:%',false)" in fixed
-    assert "payload_jsonb'->>'request_reference" not in fixed
-    assert "payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') IS NOT NULL" not in fixed
-    assert fixed.count('COALESCE(COALESCE(') == 8
+    assert "payload_jsonb'->>'request_reference" in fixed
+    assert "payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id')" in fixed
+    for field in ('key_token', 'raw_key_hash', 'condition_key_hash', 'request_reference', 'actor_person_id'):
+        assert field in fixed
+    assert fixed.count('COALESCE(COALESCE(') >= 20
     parser = pytest.importorskip('pglast.parser')
     parser.parse_plpgsql_json(
         'CREATE FUNCTION checked() RETURNS trigger LANGUAGE plpgsql AS $body$'
@@ -55,7 +54,9 @@ def test_successor_keeps_frozen_catalog_and_only_scopes_notification_lock():
     assert "business_type') IN ('stock_condition_request_seal','stock_condition_event')" in seal_fixed
     assert "LIKE 'condition-seal:%'" in seal_fixed
     assert "COALESCE(COALESCE(next_row->>'request_id',prior->>'request_id') LIKE 'condition-seal:%',false)" in seal_fixed
-    assert seal_fixed.count('COALESCE(COALESCE(') == 8
+    for field in ('key_token', 'raw_key_hash', 'condition_key_hash', 'request_reference', 'actor_person_id'):
+        assert field in seal_fixed
+    assert seal_fixed.count('COALESCE(COALESCE(') >= 18
     parser.parse_plpgsql_json(
         'CREATE FUNCTION checked_seal() RETURNS trigger LANGUAGE plpgsql AS $body$'
         + seal_fixed + '$body$')
