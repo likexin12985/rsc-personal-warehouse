@@ -33,7 +33,7 @@ def test_successor_keeps_frozen_catalog_and_only_scopes_notification_lock():
     # the guard two-valued so NULL metadata cannot fall through to FOR UPDATE.
     # A request_id/request_reference alone is deliberately not a lock marker:
     # shipment and receipt notifications carry request_id in their payload.
-    assert "COALESCE(COALESCE(next_row->>'request_id',prior->'request_id') LIKE 'condition-decision-seal:%',false)" in fixed
+    assert "COALESCE(COALESCE(next_row->>'request_id',prior->>'request_id') LIKE 'condition-decision-seal:%',false)" in fixed
     assert "payload_jsonb'->>'request_reference" not in fixed
     assert "payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') IS NOT NULL" not in fixed
     assert fixed.count('COALESCE(COALESCE(') == 8
