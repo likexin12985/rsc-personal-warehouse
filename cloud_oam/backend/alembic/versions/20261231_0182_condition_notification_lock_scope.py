@@ -37,8 +37,8 @@ LOCK_SCOPE_GUARD = """    -- Notification projections remain under the deferred 
     -- fence, but ordinary inventory notifications must not serialize
     -- unrelated transactions on the shared ledger head. Only condition
     -- evidence (or the reserved decision-seal namespace) participates in the
-    -- global decision lock. Any condition reference evidence, including
-    -- payload request IDs, is retained; generic transaction fields bypass.
+    -- global decision lock. A payload request_id/request_reference alone is
+    -- insufficient because shipment and receipt notifications carry them.
     IF TG_TABLE_NAME='notification_events'
        AND NOT (
           COALESCE(COALESCE(next_row->>'business_type',prior->>'business_type') IN ('stock_condition_decision_seal','stock_condition_event'),false)
@@ -49,23 +49,6 @@ LOCK_SCOPE_GUARD = """    -- Notification projections remain under the deferred 
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type')='stock_condition_decision_seal',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_decision_request',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-decision-seal:%',false)
-
-          OR COALESCE(COALESCE(next_row->>'key_token',prior->>'key_token') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'raw_key_hash',prior->>'raw_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'regional_key_hash',prior->>'regional_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'headquarters_key_hash',prior->>'headquarters_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'disposition_key_hash',prior->>'disposition_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'return_key_hash',prior->>'return_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'reversal_key_hash',prior->>'reversal_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'approval_key_hash',prior->>'approval_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'correction_key_hash',prior->>'correction_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'recovery_key_hash',prior->>'recovery_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'scrap_key_hash',prior->>'scrap_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'condition_key_hash',prior->>'condition_key_hash') IS NOT NULL,false)
-          OR COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id',next_row->'metadata_jsonb'->>'request_id',prior->'metadata_jsonb'->>'request_id',next_row->'after_jsonb'->>'request_id',prior->'after_jsonb'->>'request_id') IS NOT NULL
-          OR COALESCE(next_row->'payload_jsonb'->>'request_reference',prior->'payload_jsonb'->>'request_reference',next_row->'metadata_jsonb'->>'request_reference',prior->'metadata_jsonb'->>'request_reference',next_row->'after_jsonb'->>'request_reference',prior->'after_jsonb'->>'request_reference') IS NOT NULL
-          OR COALESCE(next_row->'payload_jsonb'->>'actor_user_id',prior->'payload_jsonb'->>'actor_user_id',next_row->'metadata_jsonb'->>'actor_user_id',prior->'metadata_jsonb'->>'actor_user_id',next_row->'after_jsonb'->>'actor_user_id',prior->'after_jsonb'->>'actor_user_id') IS NOT NULL
-          OR COALESCE(next_row->'payload_jsonb'->>'actor_person_id',prior->'payload_jsonb'->>'actor_person_id',next_row->'metadata_jsonb'->>'actor_person_id',prior->'metadata_jsonb'->>'actor_person_id',next_row->'after_jsonb'->>'actor_person_id',prior->'after_jsonb'->>'actor_person_id') IS NOT NULL
        ) THEN
         IF TG_OP='DELETE' THEN RETURN OLD; END IF;
         RETURN NEW;
@@ -99,23 +82,6 @@ SEAL_LOCK_SCOPE_GUARD = """    -- Notification projections remain under the defe
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'aggregate_type',prior->'payload_jsonb'->>'aggregate_type') IN ('stock_condition_request_seal','stock_condition_event'),false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'action',prior->'payload_jsonb'->>'action')='seal_condition_request',false)
           OR COALESCE(COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id') LIKE 'condition-seal:%',false)
-
-          OR COALESCE(COALESCE(next_row->>'key_token',prior->>'key_token') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'raw_key_hash',prior->>'raw_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'regional_key_hash',prior->>'regional_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'headquarters_key_hash',prior->>'headquarters_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'disposition_key_hash',prior->>'disposition_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'return_key_hash',prior->>'return_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'reversal_key_hash',prior->>'reversal_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'approval_key_hash',prior->>'approval_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'correction_key_hash',prior->>'correction_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'recovery_key_hash',prior->>'recovery_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'scrap_key_hash',prior->>'scrap_key_hash') IS NOT NULL,false)
-          OR COALESCE(COALESCE(next_row->>'condition_key_hash',prior->>'condition_key_hash') IS NOT NULL,false)
-          OR COALESCE(next_row->'payload_jsonb'->>'request_id',prior->'payload_jsonb'->>'request_id',next_row->'metadata_jsonb'->>'request_id',prior->'metadata_jsonb'->>'request_id',next_row->'after_jsonb'->>'request_id',prior->'after_jsonb'->>'request_id') IS NOT NULL
-          OR COALESCE(next_row->'payload_jsonb'->>'request_reference',prior->'payload_jsonb'->>'request_reference',next_row->'metadata_jsonb'->>'request_reference',prior->'metadata_jsonb'->>'request_reference',next_row->'after_jsonb'->>'request_reference',prior->'after_jsonb'->>'request_reference') IS NOT NULL
-          OR COALESCE(next_row->'payload_jsonb'->>'actor_user_id',prior->'payload_jsonb'->>'actor_user_id',next_row->'metadata_jsonb'->>'actor_user_id',prior->'metadata_jsonb'->>'actor_user_id',next_row->'after_jsonb'->>'actor_user_id',prior->'after_jsonb'->>'actor_user_id') IS NOT NULL
-          OR COALESCE(next_row->'payload_jsonb'->>'actor_person_id',prior->'payload_jsonb'->>'actor_person_id',next_row->'metadata_jsonb'->>'actor_person_id',prior->'metadata_jsonb'->>'actor_person_id',next_row->'after_jsonb'->>'actor_person_id',prior->'after_jsonb'->>'actor_person_id') IS NOT NULL
        ) THEN
         IF TG_OP='DELETE' THEN RETURN OLD; END IF;
         RETURN NEW;
