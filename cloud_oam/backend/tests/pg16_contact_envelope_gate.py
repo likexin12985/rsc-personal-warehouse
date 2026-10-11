@@ -448,11 +448,17 @@ def downgrade_blocked(owner, configuration, scripts, label):
             except ValueError as error:
                 require(str(error) == 'cannot downgrade 0181 while non-v1 contact history exists',
                     'exact_downgrade_blocker')
+                # The 0182 downgrade is intentionally still visible inside
+                # this outer transaction.  The refusal is only durable-safe
+                # after that transaction rolls back; verify both boundaries
+                # separately instead of requiring the pre-rollback head.
+                head(db, '20261230_0181')
             else:
                 raise RuntimeError('v2_downgrade_unexpected_success')
-            head(db, HEAD)
         finally:
             transaction.rollback()
+    with owner.connect() as db:
+        head(db, HEAD)
     return dict(case=label, refusedBeforeMutation=True, outerTransactionRolledBack=True)
 
 
