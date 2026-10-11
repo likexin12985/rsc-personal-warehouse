@@ -58,6 +58,14 @@ def test_runtime_condition_catalog_overlay_admits_successor_source():
     assert sha256(row['prosrc'].encode()).hexdigest() == m['FIXED_HASH']
     assert row['definition'].count(m['FIXED_SOURCE']) == 1
     assert m['LEGACY_SOURCE'] not in row['definition']
+    readiness_rows = [
+        row for family in ('newFunctions', 'replacedFunctions')
+        for row in database_security._loss_return_stop_catalog.DATA.get(family, [])
+        if row.get('signature') == m['READY_SIGNATURE'].removeprefix('public.')
+    ]
+    assert len(readiness_rows) == 1
+    assert readiness_rows[0]['prosrc'] == m['READY_SOURCE']
+    assert readiness_rows[0]['prosrcSha256'] == m['READY_HASH']
 
 
 @pytest.mark.parametrize('direction', ['upgrade', 'downgrade'])

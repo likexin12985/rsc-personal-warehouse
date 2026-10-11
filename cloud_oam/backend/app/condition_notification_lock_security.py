@@ -131,5 +131,27 @@ def register(namespace):
     ready_data['after'] = ready_after
     ready_data['afterSha256'] = READY_SUCCESSOR_SHA256
     ready_data['revision'] = REVISION
+    loss_return_stop_catalog = namespace.get('_loss_return_stop_catalog')
+    if loss_return_stop_catalog is None or not isinstance(loss_return_stop_catalog.DATA, dict):
+        raise ValueError('0182 loss-return-stop catalog predecessor not admitted')
+    loss_return_stop_data = deepcopy(loss_return_stop_catalog.DATA)
+    readiness_rows = [
+        row for family in ('newFunctions', 'replacedFunctions')
+        for row in loss_return_stop_data.get(family, [])
+        if row.get('signature') == READY_SIGNATURE
+    ]
+    if len(readiness_rows) != 1:
+        raise ValueError('0182 loss-return-stop readiness predecessor not admitted')
+    loss_readiness = readiness_rows[0]
+    if (loss_readiness.get('prosrc') != READY_SOURCE
+            or loss_readiness.get('prosrcSha256') != READY_LEGACY_SHA256
+            or not isinstance(loss_readiness.get('definition'), str)
+            or loss_readiness['definition'].count(READY_SOURCE) != 1):
+        raise ValueError('0182 loss-return-stop readiness source predecessor not admitted')
+    loss_readiness['prosrc'] = READY_SUCCESSOR_SOURCE
+    loss_readiness['definition'] = loss_readiness['definition'].replace(
+        READY_SOURCE, READY_SUCCESSOR_SOURCE, 1)
+    loss_readiness['prosrcSha256'] = READY_SUCCESSOR_SHA256
     readiness.DATA = ready_data
     condition_catalog.DATA = condition_data
+    loss_return_stop_catalog.DATA = loss_return_stop_data
