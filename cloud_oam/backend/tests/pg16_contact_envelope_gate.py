@@ -84,7 +84,7 @@ def current_catalog_data(data):
     ready['prosrc'] = READY_SUCCESSOR_SOURCE
     ready['definition'] = ready['definition'].replace(legacy_source, READY_SUCCESSOR_SOURCE, 1)
     current['catalog']['functions']['after']['rsc_condition_decision_seal_lock()'] = deepcopy(
-        json.loads((WORKSPACE / 'alembic/condition_notification_lock_scope_0182/functions.json').read_text())
+        json.loads((WORKSPACE / 'backend/alembic/condition_notification_lock_scope_0182/functions.json').read_text())
         ['functions']['rsc_condition_decision_seal_lock()']['after']
     )
     return current
