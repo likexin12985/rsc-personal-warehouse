@@ -51,9 +51,14 @@ def test_exact_function_and_readiness_chain():
     assert contact['readiness']['beforeSha256'] == ready['afterSha256']
     ready = contact['readiness']
     current_ready = security._stock_scrap_readiness.DATA
-    assert current_ready['revision'] == ready['revision']
-    assert current_ready['after'] == ready['after']
-    assert current_ready['afterSha256'] == ready['afterSha256']
+    # 0181 is the immutable predecessor of the current readiness overlay;
+    # 0182 is the actual head imported by database_security.
+    from app import condition_notification_lock_security as notification_lock
+    assert ready['revision'] == '20261230_0181'
+    assert current_ready['revision'] == notification_lock.REVISION == '20261231_0182'
+    assert ready['after']['prosrc'] == notification_lock.READY_SOURCE
+    assert current_ready['after']['prosrc'] == notification_lock.READY_SUCCESSOR_SOURCE
+    assert current_ready['afterSha256'] == notification_lock.READY_SUCCESSOR_SHA256
     for signature, change in DATA['functions'].items():
         for side in ('before', 'after'):
             assert sha256(change[side].encode()).hexdigest() == change[side+'Sha256']

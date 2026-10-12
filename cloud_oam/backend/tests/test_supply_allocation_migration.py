@@ -52,9 +52,14 @@ def test_forward_catalog_matches_runtime_and_exact_predecessor():
     assert contact['readiness']['beforeSha256'] == predecessor['afterSha256']
     predecessor = contact['readiness']
     current_ready = security._stock_scrap_readiness.DATA
-    assert current_ready['revision'] == predecessor['revision']
-    assert current_ready['after'] == predecessor['after']
-    assert current_ready['afterSha256'] == predecessor['afterSha256']
+    # Preserve the exact 0181 predecessor chain while checking the mutable
+    # runtime catalog at its current 0182 head.
+    from app import condition_notification_lock_security as notification_lock
+    assert predecessor['revision'] == '20261230_0181'
+    assert current_ready['revision'] == notification_lock.REVISION == '20261231_0182'
+    assert predecessor['after']['prosrc'] == notification_lock.READY_SOURCE
+    assert current_ready['after']['prosrc'] == notification_lock.READY_SUCCESSOR_SOURCE
+    assert current_ready['afterSha256'] == notification_lock.READY_SUCCESSOR_SHA256
     assert set(DATA['functions']) == {signature, 'rsc_oam_runtime_binding_ready_0044()',
                                     'rsc_guard_material_request_supply_task_0059()'}
     for signature, row in DATA['functions'].items():
