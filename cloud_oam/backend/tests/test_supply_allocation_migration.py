@@ -58,6 +58,12 @@ def test_forward_catalog_matches_runtime_and_exact_predecessor():
     assert current_ready['revision'] == REVISION
     assert current_ready['after']['prosrc'] == READY_SUCCESSOR_SOURCE
     assert current_ready['afterSha256'] == READY_SUCCESSOR_SHA256
+    assert current_ready['after']['definition'] == ready['after']['definition'].replace(
+        ready['after']['prosrc'], READY_SUCCESSOR_SOURCE, 1)
+    for field in ('proname', 'signature', 'prosecdef', 'provolatile',
+                  'proparallel', 'proisstrict', 'proleakproof', 'proconfig',
+                  'owner', 'identity_arguments', 'acl'):
+        assert current_ready['after'][field] == ready['after'][field]
     assert set(DATA['functions']) == {signature, 'rsc_oam_runtime_binding_ready_0044()',
                                     'rsc_guard_material_request_supply_task_0059()'}
     for signature, row in DATA['functions'].items():
