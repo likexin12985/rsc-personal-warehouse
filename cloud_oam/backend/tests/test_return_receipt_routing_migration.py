@@ -57,6 +57,12 @@ def test_exact_function_and_readiness_chain():
     assert current_ready['revision'] == REVISION
     assert current_ready['after']['prosrc'] == READY_SUCCESSOR_SOURCE
     assert current_ready['afterSha256'] == READY_SUCCESSOR_SHA256
+    assert current_ready['after']['definition'] == ready['after']['definition'].replace(
+        ready['after']['prosrc'], READY_SUCCESSOR_SOURCE, 1)
+    for field in ('proname', 'signature', 'prosecdef', 'provolatile',
+                  'proparallel', 'proisstrict', 'proleakproof', 'proconfig',
+                  'owner', 'identity_arguments', 'acl'):
+        assert current_ready['after'][field] == ready['after'][field]
     for signature, change in DATA['functions'].items():
         for side in ('before', 'after'):
             assert sha256(change[side].encode()).hexdigest() == change[side+'Sha256']
