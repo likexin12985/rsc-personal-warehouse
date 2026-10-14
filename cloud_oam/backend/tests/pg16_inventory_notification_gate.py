@@ -4,6 +4,7 @@ No database provisioning, production connection or provider call lives here.
 The parent gate must already have verified a fresh GitHub PostgreSQL 16 cluster
 and committed real posting/reversal fixtures through their business services.
 """
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
