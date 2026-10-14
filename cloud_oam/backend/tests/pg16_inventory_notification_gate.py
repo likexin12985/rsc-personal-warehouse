@@ -4,13 +4,17 @@ No database provisioning, production connection or provider call lives here.
 The parent gate must already have verified a fresh GitHub PostgreSQL 16 cluster
 and committed real posting/reversal fixtures through their business services.
 """
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
+from hashlib import sha256
 from decimal import Decimal
 from unittest.mock import patch
+from uuid import uuid4
 
 from sqlalchemy import String, cast, func, literal, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.formal_access import FormalAccessError, load_formal_principal
@@ -135,6 +139,7 @@ def assert_inventory_notification_gate(api_engine):
             db.commit()
     assert total_deliveries > 0, "personal posting/reversal fixtures must exercise delivery INSERT ACL"
     assert _stock_and_source_snapshot(api_engine) == before
+    _assert_condition_notification_lock_scope(api_engine)
     _assert_inventory_source_isolation(api_engine)
     print("PG16 inventory notifications: API role, posting/reversal/nonzero-stocktake sources, same-object ownership, "
           "independent-object progress, consumer rollback, source quarantine and expansion deduplication PASS; no provider call", flush=True)
@@ -289,3 +294,81 @@ def _assert_inventory_source_operations(api_engine, outbox_id):
     assert set(before[2]) < set(after[2]) and len(after[2]) == len(before[2]) + 1
     print("PG16 source operations: national permissions, exact-source ownership, API role ACL, "
           "caller rollback, immutable failure and idempotent recheck PASS; no delivery or provider call", flush=True)
+
+
+def _assert_condition_notification_lock_scope(api_engine):
+    """A request_id in shipment/receipt payloads must not take the ledger lock."""
+    empty_manifest = sha256(b"notification-person-targets.v1\n").hexdigest()
+
+    def probe(*, event_type, business_type, payload, blocked):
+        def insert_and_rollback():
+            event_id = uuid4()
+            with Session(api_engine) as db:
+                db.execute(text("SET LOCAL statement_timeout = '1500ms'"))
+                db.execute(text("""
+                    INSERT INTO notification_events (
+                        id, event_type, business_type, business_id, dedup_key,
+                        payload_jsonb, status, occurred_at, created_at,
+                        target_manifest_sha256
+                    ) VALUES (
+                        :id, :event_type, :business_type, :business_id, :dedup_key,
+                        CAST(:payload_json AS jsonb), 'pending', clock_timestamp(),
+                        clock_timestamp(), :target_manifest
+                    )
+                """), {
+                    "id": event_id,
+                    "event_type": event_type,
+                    "business_type": business_type,
+                    "business_id": str(uuid4()),
+                    "dedup_key": f"pg16-condition-lock:{event_id}",
+                    "payload_json": json.dumps(payload, sort_keys=True),
+                    "target_manifest": empty_manifest,
+                })
+                db.flush()
+                db.rollback()
+            return True
+
+        with Session(api_engine) as owner:
+            owner.execute(text(
+                "SELECT id FROM inventory_ledger_heads "
+                "WHERE stream_key='inventory' FOR UPDATE"
+            )).scalar_one()
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(insert_and_rollback)
+                if blocked:
+                    try:
+                        future.result(timeout=5)
+                    except OperationalError as exc:
+                        assert getattr(exc.orig, "sqlstate", None) == "57014", repr(exc)
+                    else:
+                        raise AssertionError(
+                            "condition notification unexpectedly bypassed ledger lock"
+                        )
+                else:
+                    assert future.result(timeout=5) is True
+            owner.rollback()
+
+    request_id = str(uuid4())
+    probe(
+        event_type="shipment_handover_registered",
+        business_type="shipment",
+        payload={"request_id": request_id, "shipment_id": str(uuid4())},
+        blocked=False,
+    )
+    probe(
+        event_type="receipt_registered",
+        business_type="receipt",
+        payload={"request_id": str(uuid4()), "receipt_id": str(uuid4())},
+        blocked=False,
+    )
+    probe(
+        event_type="stock_condition.event",
+        business_type="stock_condition_event",
+        payload={"request_id": str(uuid4()), "schema_version": "condition_result/1"},
+        blocked=True,
+    )
+    print(
+        "PG16 condition notification lock scope: shipment/receipt request_id payloads "
+        "bypass the inventory ledger lock while condition namespace remains serialized PASS",
+        flush=True,
+    )
